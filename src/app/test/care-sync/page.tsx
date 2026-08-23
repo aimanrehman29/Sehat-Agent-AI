@@ -1,0 +1,271 @@
+/**
+ * Care-Sync AI — Test Page
+ * Upload prescriptions, view parsed medicines, dosages & reminder schedules.
+ */
+
+"use client";
+
+import { useState, useRef } from "react";
+
+export default function CareSyncTestPage() {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState<number>(0);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  function handleFile(f: File) {
+    setFile(f);
+    setPreview(URL.createObjectURL(f));
+    setResult(null);
+    setError(null);
+  }
+
+  async function analyze() {
+    if (!file) return;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    const t0 = performance.now();
+
+    try {
+      const base64 = await fileToBase64(file);
+      const res = await fetch("/api/track-a/care-sync/parse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ media_base64: base64, media_type: file.type }),
+      });
+      const data = await res.json();
+      setElapsed(Math.round(performance.now() - t0));
+      if (!res.ok) setError(data.error?.message || `HTTP ${res.status}`);
+      else setResult(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Request failed");
+      setElapsed(Math.round(performance.now() - t0));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const r = result?.result as Record<string, unknown> | undefined;
+  const medicines = (r?.medicines || []) as Record<string, unknown>[];
+  const reminders = (r?.reminders || []) as Record<string, unknown>[];
+  const doctor = r?.doctor_info as Record<string, unknown> | undefined;
+
+  const S = (v: unknown): string => (v == null ? "" : String(v));
+
+  const formIcons: Record<string, string> = {
+    tablet: "💊",
+    capsule: "💊",
+    syrup: "🧴",
+    injection: "💉",
+    cream: "🧴",
+    drops: "💧",
+    inhaler: "🫁",
+  };
+
+  return (
+    <div>
+      <div className="mb-6">
+        <div className="flex items-center gap-3 mb-1">
+          <span className="text-3xl">💊</span>
+          <h1 className="text-2xl font-bold text-gray-900">Care-Sync AI</h1>
+        </div>
+        <p className="text-gray-500 text-sm ml-12">
+          Upload a doctor&apos;s prescription (parchi) to extract medicines, dosages, and set up reminders.
+        </p>
+      </div>
+
+      {/* Upload */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <div>
+          <div
+            onClick={() => fileRef.current?.click()}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+            }}
+            className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-purple-400 hover:bg-purple-50/30 transition-colors"
+          >
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+            />
+            {preview ? (
+              <img src={preview} alt="Prescription preview" className="max-h-48 mx-auto rounded-lg shadow-sm" />
+            ) : (
+              <div>
+                <p className="text-4xl mb-3">📝</p>
+                <p className="text-sm font-medium text-gray-700">Upload prescription</p>
+                <p className="text-xs text-gray-400 mt-1">Photo of a doctor&apos;s prescription (parchi)</p>
+              </div>
+            )}
+          </div>
+          {file && <p className="text-xs text-gray-400 mt-2 text-center">{file.name}</p>}
+
+          <button
+            onClick={analyze}
+            disabled={!file || loading}
+            className="w-full mt-4 py-3 px-4 rounded-lg font-medium text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed bg-purple-600 text-white hover:bg-purple-700"
+          >
+            {loading ? <span className="flex items-center justify-center gap-2"><span className="animate-spin">⏳</span> Parsing prescription...</span> : "Parse Prescription"}
+          </button>
+        </div>
+
+        {/* Doctor + Stats */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">Prescription Info</h3>
+          {error && <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">{error}</div>}
+          {result && r && (
+            <div className="space-y-4">
+              {doctor && (
+                <div className="bg-purple-50 rounded-lg p-4 space-y-1">
+                  {S(doctor.name) && <p className="text-sm text-purple-800 font-semibold">{S(doctor.name)}</p>}
+                  {S(doctor.clinic) && <p className="text-xs text-purple-600">{S(doctor.clinic)}</p>}
+                  <div className="flex gap-4 mt-2 text-xs text-purple-500">
+                    {S(doctor.date) && <span>Date: {S(doctor.date)}</span>}
+                    {S(doctor.registration_no) && <span>Reg: {S(doctor.registration_no)}</span>}
+                  </div>
+                </div>
+              )}
+              <div className="flex gap-3">
+                <div className="bg-purple-50 text-purple-700 px-3 py-2 rounded-lg">
+                  <p className="text-xs opacity-70">Medicines</p>
+                  <p className="text-lg font-bold">{medicines.length}</p>
+                </div>
+                <div className="bg-blue-50 text-blue-700 px-3 py-2 rounded-lg">
+                  <p className="text-xs opacity-70">Reminders</p>
+                  <p className="text-lg font-bold">{reminders.filter(rm => ((rm.cron_expressions as string[]) || []).length > 0).length}</p>
+                </div>
+                <div className="bg-green-50 text-green-700 px-3 py-2 rounded-lg">
+                  <p className="text-xs opacity-70">Confidence</p>
+                  <p className="text-lg font-bold">{((result.confidence_score as number) * 100).toFixed(0)}%</p>
+                </div>
+              </div>
+              <p className="text-xs text-gray-400">Processed in {elapsed}ms</p>
+            </div>
+          )}
+          {!result && !error && !loading && <p className="text-gray-400 text-sm text-center py-8">Upload a prescription to get started</p>}
+        </div>
+      </div>
+
+      {/* Medicines List */}
+      {medicines.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">Parsed Medicines</h3>
+          <div className="space-y-3">
+            {medicines.map((med, i) => (
+              <div key={i} className="border border-gray-100 rounded-lg p-4 hover:bg-gray-50 transition-colors">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">
+                      {formIcons[(S(med.form) || "").toLowerCase()] || "💊"}
+                    </span>
+                    <div>
+                      <h4 className="font-semibold text-gray-900">{S(med.name)}</h4>
+                      {S(med.generic_name) && <p className="text-xs text-gray-400">{S(med.generic_name)}</p>}
+                    </div>
+                  </div>
+                  <div className="text-right text-sm">
+                    {S(med.dosage) && <span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded text-xs font-medium">{S(med.dosage)}</span>}
+                    {S(med.form) && <span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded text-xs font-medium ml-1">{S(med.form)}</span>}
+                  </div>
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
+                  {S(med.frequency) && (
+                    <div className="bg-blue-50 rounded p-2">
+                      <span className="text-blue-400">Frequency</span>
+                      <p className="text-blue-800 font-medium mt-0.5">{S(med.frequency)}</p>
+                    </div>
+                  )}
+                  {S(med.duration) && (
+                    <div className="bg-green-50 rounded p-2">
+                      <span className="text-green-400">Duration</span>
+                      <p className="text-green-800 font-medium mt-0.5">{S(med.duration)}</p>
+                    </div>
+                  )}
+                  {S(med.instructions) && (
+                    <div className="bg-amber-50 rounded p-2">
+                      <span className="text-amber-400">Instructions</span>
+                      <p className="text-amber-800 font-medium mt-0.5">{S(med.instructions)}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Reminder Schedules */}
+      {reminders.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">Reminder Schedules</h3>
+          <div className="space-y-3">
+            {reminders.map((rem, i) => {
+              const crons = (rem.cron_expressions as string[]) || [];
+              return (
+                <div key={i} className={`border rounded-lg p-4 ${crons.length > 0 ? "border-blue-200 bg-blue-50/50" : "border-gray-100 bg-gray-50/50"}`}>
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-medium text-gray-900">{S(rem.medicine_name)}</h4>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${crons.length > 0 ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-500"}`}>
+                      {crons.length > 0 ? `${crons.length} reminder${crons.length > 1 ? "s" : ""}/day` : "As needed"}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1">{S(rem.schedule_description)}</p>
+                  {crons.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {crons.map((c, j) => (
+                        <code key={j} className="text-xs bg-white border border-gray-200 px-2 py-0.5 rounded font-mono">{c}</code>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Raw OCR Text */}
+      {!!r?.raw_extracted_text && (
+        <details className="bg-gray-100 rounded-xl p-4 mb-6">
+          <summary className="text-sm text-gray-600 cursor-pointer hover:text-gray-900">Raw Extracted Text (OCR)</summary>
+          <pre className="mt-3 text-xs text-gray-700 whitespace-pre-wrap font-mono bg-white p-4 rounded-lg border">{S(r.raw_extracted_text)}</pre>
+        </details>
+      )}
+
+      {/* Disclaimer */}
+      {result && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+          <p className="text-xs text-amber-800 leading-relaxed">
+            <strong>⚕️ {(result?.guardrails as Record<string, unknown>)?.disclaimer_text as string}</strong>
+          </p>
+        </div>
+      )}
+
+      {/* Full JSON */}
+      {result && (
+        <details className="bg-gray-900 rounded-xl p-4">
+          <summary className="text-sm text-gray-300 cursor-pointer hover:text-white">Full JSON Response</summary>
+          <pre className="mt-4 text-xs text-green-400 overflow-auto max-h-96">{JSON.stringify(result, null, 2)}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}

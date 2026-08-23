@@ -1,0 +1,171 @@
+// =============================================================================
+// Sehat-Agent AI — Prisma Schema
+// =============================================================================
+// Database: PostgreSQL
+// Models: DrugRegistry, LabReport, LabMetric, Prescription, PrescriptionItem,
+//         MedicationReminder
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHARMA-CHECK: DRAP Drug Registry
+// ─────────────────────────────────────────────────────────────────────────────
+// Stores the authoritative registry of drugs approved by the Drug Regulatory
+// Authority of Pakistan (DRAP). Used to validate medicine authenticity by
+// matching extracted barcode/QR/registration numbers against this table.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model DrugRegistry {
+  id                String   @id @default(uuid())
+  registrationNo    String   @unique @map("registration_no")
+  drugName          String   @map("drug_name")
+  genericName       String?  @map("generic_name")
+  manufacturer      String
+  batchNumbers      String[] @map("batch_numbers")
+  expiryDates       String[] @map("expiry_dates")
+  category          String   // e.g. "Antibiotic", "Analgesic", "Antiviral"
+  schedule          String?  // Drug schedule: "OTC", "Schedule-H", "Schedule-G"
+  isActive          Boolean  @default(true) @map("is_active")
+  barcodeData       String?  @map("barcode_data")
+  qrData            String?  @map("qr_data")
+  additionalInfo    Json?    @map("additional_info")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@index([drugName])
+  @@index([manufacturer])
+  @@index([barcodeData])
+  @@index([isActive])
+  @@map("drug_registry")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LINGO-MED: Lab Reports & Metrics
+// ─────────────────────────────────────────────────────────────────────────────
+// Stores parsed lab report data. Each report contains multiple metrics
+// (e.g., Hemoglobin, Fasting Glucose) with their values, reference ranges,
+// and severity classifications.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model LabReport {
+  id                String      @id @default(uuid())
+  userId            String      @map("user_id")
+  session_id        String?
+  patientName       String?     @map("patient_name")
+  patientAge        Int?        @map("patient_age")
+  patientGender     String?     @map("patient_gender")
+  reportDate        DateTime?   @map("report_date")
+  labName           String?     @map("lab_name")
+  summary           String      // AI-generated plain-language summary
+  rawOcrText        String?     @map("raw_ocr_text")
+  metrics           LabMetric[]
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@map("lab_reports")
+}
+
+model LabMetric {
+  id              String   @id @default(uuid())
+  labReportId     String   @map("lab_report_id")
+  testName        String   @map("test_name")
+  value           Float
+  unit            String
+  referenceLow    Float?   @map("reference_low")
+  referenceHigh   Float?   @map("reference_high")
+  severity        String   // NORMAL | BORDERLINE | ABNORMAL | CRITICAL
+  explanation     String   // AI-generated plain-language explanation
+  suggestion      String   // Actionable suggestion for the user
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  labReport       LabReport @relation(fields: [labReportId], references: [id], onDelete: Cascade)
+
+  @@index([labReportId])
+  @@index([testName])
+  @@map("lab_metrics")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CARE-SYNC: Prescriptions & Medication Items
+// ─────────────────────────────────────────────────────────────────────────────
+// Stores parsed prescription data. Each prescription contains multiple items
+// (medicines) with their dosages, frequencies, and durations.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Prescription {
+  id                String             @id @default(uuid())
+  userId            String             @map("user_id")
+  session_id        String?
+  doctorName        String?            @map("doctor_name")
+  doctorClinic      String?            @map("doctor_clinic")
+  doctorRegNo       String?            @map("doctor_reg_no")
+  prescriptionDate  DateTime?          @map("prescription_date")
+  rawOcrText        String?            @map("raw_ocr_text")
+  items             PrescriptionItem[]
+  reminders         MedicationReminder[]
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@map("prescriptions")
+}
+
+model PrescriptionItem {
+  id              String   @id @default(uuid())
+  prescriptionId  String   @map("prescription_id")
+  medicineName    String   @map("medicine_name")
+  genericName     String?  @map("generic_name")
+  dosage          String?  // e.g. "500mg", "10ml"
+  form            String?  // e.g. "tablet", "syrup", "injection"
+  frequency       String?  // e.g. "twice daily", "before food"
+  duration        String?  // e.g. "7 days", "2 weeks"
+  instructions    String?  // e.g. "take before food", "avoid alcohol"
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  prescription    Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+
+  @@index([prescriptionId])
+  @@index([medicineName])
+  @@map("prescription_items")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CARE-SYNC: Medication Reminders
+// ─────────────────────────────────────────────────────────────────────────────
+// Cron-based reminder system for medication adherence. Each reminder is
+// linked to a prescription and stores the cron schedule, delivery channel,
+// and delivery status tracking.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model MedicationReminder {
+  id                String   @id @default(uuid())
+  prescriptionId    String   @map("prescription_id")
+  medicineName      String   @map("medicine_name")
+  userId            String   @map("user_id")
+  cronExpression    String   @map("cron_expression")
+  timezone          String   @default("Asia/Karachi")
+  isActive          Boolean  @default(true) @map("is_active")
+  channel           String   @default("push") // push | sms | voice
+  nextScheduledAt   DateTime? @map("next_scheduled_at")
+  lastTriggeredAt   DateTime? @map("last_triggered_at")
+  lastDeliveryStatus String?  @map("last_delivery_status") // pending | delivered | failed
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  prescription      Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([prescriptionId])
+  @@index([isActive])
+  @@index([nextScheduledAt])
+  @@map("medication_reminders")
+}

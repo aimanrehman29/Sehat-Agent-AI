@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sehat-Agent AI — Test Console</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8fafc; color: #1e293b; }
+    .container { max-width: 800px; margin: 0 auto; padding: 2rem; }
+    h1 { font-size: 2rem; margin-bottom: 0.25rem; }
+    .subtitle { color: #64748b; margin-bottom: 2rem; }
+    .card { background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; }
+    .card h2 { font-size: 1.25rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; }
+    .card p { color: #64748b; font-size: 0.875rem; margin-bottom: 1rem; }
+    .btn { background: #3b82f6; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; font-size: 0.875rem; cursor: pointer; font-weight: 500; }
+    .btn:hover { background: #2563eb; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .result { background: #0f172a; border-radius: 8px; padding: 1rem; margin-top: 1rem; }
+    .result pre { color: #4ade80; font-size: 0.75rem; white-space: pre-wrap; max-height: 300px; overflow: auto; }
+    input[type="file"] { display: block; margin-bottom: 1rem; padding: 0.5rem; border: 2px dashed #cbd5e1; border-radius: 8px; width: 100%; }
+    .disclaimer { background: #fef3c7; border: 1px solid #fbbf24; border-radius: 8px; padding: 1rem; margin-top: 2rem; font-size: 0.75rem; color: #92400e; }
+    .badge { display: inline-block; background: #dbeafe; color: #1d4ed8; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; margin-right: 0.5rem; margin-bottom: 0.5rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🏥 Sehat-Agent AI</h1>
+    <p class="subtitle">Test Console — Upload images to test each agent module</p>
+
+    <!-- Pharma-Check -->
+    <div class="card">
+      <h2>🔬 Pharma-Check AI <small style="color:#94a3b8;font-weight:normal">— Fake Medicine Detector</small></h2>
+      <p>Upload a photo of medicine packaging to verify authenticity via barcode/QR/DRAP lookup.</p>
+      <span class="badge">Barcode extraction</span>
+      <span class="badge">DRAP registry</span>
+      <span class="badge">Risk scoring</span>
+      <input type="file" accept="image/*" id="pharmaFile">
+      <button class="btn" onclick="analyze('pharma-check', 'pharmaFile', 'pharmaResult')">Analyze Medicine</button>
+      <div class="result" id="pharmaResult" style="display:none"><pre></pre></div>
+    </div>
+
+    <!-- Lingo-Med -->
+    <div class="card">
+      <h2>📋 Lingo-Med AI <small style="color:#94a3b8;font-weight:normal">— Lab Report Simplifier</small></h2>
+      <p>Upload a lab report to get plain-language explanations of your results.</p>
+      <span class="badge">OCR extraction</span>
+      <span class="badge">Metric flagging</span>
+      <span class="badge">Plain English</span>
+      <input type="file" accept="image/*,application/pdf" id="lingoFile">
+      <button class="btn" onclick="analyze('lingo-med', 'lingoFile', 'lingoResult')">Analyze Report</button>
+      <div class="result" id="lingoResult" style="display:none"><pre></pre></div>
+    </div>
+
+    <!-- Care-Sync -->
+    <div class="card">
+      <h2>💊 Care-Sync AI <small style="color:#94a3b8;font-weight:normal">— Prescription Parser</small></h2>
+      <p>Upload a prescription (parchi) to extract medicines and generate reminder schedules.</p>
+      <span class="badge">Prescription OCR</span>
+      <span class="badge">Dose extraction</span>
+      <span class="badge">Cron reminders</span>
+      <input type="file" accept="image/*" id="careFile">
+      <button class="btn" onclick="analyze('care-sync', 'careFile', 'careResult')">Parse Prescription</button>
+      <div class="result" id="careResult" style="display:none"><pre></pre></div>
+    </div>
+
+    <div class="disclaimer">
+      ⚕️ <strong>ASSIST — NOT DIAGNOSE:</strong> This AI-generated analysis is for informational purposes only.
+      It is NOT a substitute for professional medical advice, diagnosis, or treatment.
+      Always consult a qualified healthcare provider.
+    </div>
+  </div>
+
+  <script>
+    async function analyze(agent, fileId, resultId) {
+      const file = document.getElementById(fileId).files[0];
+      if (!file) { alert('Please select a file first.'); return; }
+      const btn = event.target;
+      btn.disabled = true;
+      btn.textContent = 'Processing...';
+      try {
+        const base64 = await toBase64(file);
+        const res = await fetch('/api/track-a/' + (agent === 'care-sync' ? 'care-sync/parse' : agent), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ media_base64: base64, media_type: file.type })
+        });
+        const data = await res.json();
+        const el = document.getElementById(resultId);
+        el.style.display = 'block';
+        el.querySelector('pre').textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        alert('Error: ' + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = btn.textContent.replace('Processing...', btn.textContent);
+      }
+    }
+    function toBase64(file) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result.split(',')[1]);
+        r.onerror = reject;
+        r.readAsDataURL(file);
+      });
+    }
+  </script>
+</body>
+</html>
