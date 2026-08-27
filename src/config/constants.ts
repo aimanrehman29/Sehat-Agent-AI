@@ -9,6 +9,9 @@ export const AGENTS = {
   PHARMA_CHECK: "pharma-check",
   LINGO_MED: "lingo-med",
   CARE_SYNC: "care-sync",
+  TRIAGE: "triage",
+  GEO_LOCATOR: "geo-locator",
+  EMERGENCY: "emergency",
 } as const;
 
 export type AgentId = (typeof AGENTS)[keyof typeof AGENTS];
@@ -63,6 +66,32 @@ export enum ReminderFrequency {
   EVERY_OTHER_DAY = "EVERY_OTHER_DAY",
   WEEKLY = "WEEKLY",
   AS_NEEDED = "AS_NEEDED",
+}
+
+// ─── Urgency Levels (Track B — Triage / Emergency) ──────────────────────────
+
+export enum UrgencyLevel {
+  LOW = "LOW",
+  MODERATE = "MODERATE",
+  HIGH = "HIGH",
+  EMERGENCY = "EMERGENCY",
+}
+
+// ─── Emergency Severity (Track B) ───────────────────────────────────────────
+
+export enum EmergencySeverity {
+  NONE = "NONE",
+  MODERATE = "MODERATE",
+  HIGH = "HIGH",
+  CRITICAL = "CRITICAL",
+}
+
+// ─── Facility Types (Track B — GeoLocator) ──────────────────────────────────
+
+export enum FacilityType {
+  HOSPITAL = "hospital",
+  PHARMACY = "pharmacy",
+  CLINIC = "clinic",
 }
 
 // ─── Source Channels ────────────────────────────────────────────────────────

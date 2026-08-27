@@ -28,6 +28,25 @@ export interface TrackARequestBody {
   session_id?: string;
 }
 
+/**
+ * Expected JSON body for POST /api/track-b/* endpoints.
+ * Track B agents deal with text input, GPS coordinates, or symptom descriptions.
+ */
+export interface TrackBRequestBody {
+  /** Free-text input (symptoms, query, emergency text) */
+  text?: string;
+  /** GPS latitude */
+  latitude?: number;
+  /** GPS longitude */
+  longitude?: number;
+  /** Facility type filter (hospital, pharmacy, clinic) */
+  facility_type?: string;
+  /** User identifier */
+  user_id?: string;
+  /** Session identifier for multi-turn */
+  session_id?: string;
+}
+
 // ─── File Upload Types ──────────────────────────────────────────────────────
 
 export interface UploadedFile {

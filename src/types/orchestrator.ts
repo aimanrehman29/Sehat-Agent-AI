@@ -108,7 +108,10 @@ export interface GuardrailPayload {
 export type AgentResultPayload =
   | PharmaCheckResult
   | LingoMedResult
-  | CareSyncResult;
+  | CareSyncResult
+  | TriageResult
+  | GeoLocatorResult
+  | EmergencyResult;
 
 // ─── Pharma-Check Result ────────────────────────────────────────────────────
 
@@ -249,6 +252,63 @@ export interface ReminderSchedule {
   schedule_description: string;
   /** Next scheduled times */
   next_scheduled_times: string[];
+}
+
+// ─── Triage Result (Track B) ────────────────────────────────────────────────
+
+export interface TriageResult {
+  /** Recommended medical department */
+  department: string;
+  /** Urgency classification */
+  urgency: "LOW" | "MODERATE" | "HIGH" | "EMERGENCY";
+  /** Suggested specialist (if applicable) */
+  suggested_specialist: string | null;
+  /** Recommended action */
+  action: string;
+  /** Symptom keywords detected */
+  keywords_detected: string[];
+  /** Confidence score (0–1) */
+  confidence: number;
+  /** Emergency escalation result — populated when urgency is HIGH */
+  emergency_escalation?: EmergencyResult;
+}
+
+// ─── GeoLocator Result (Track B) ────────────────────────────────────────────
+
+export interface GeoLocatorResult {
+  /** Nearby facilities found */
+  facilities: Facility[];
+  /** Search radius in kilometers */
+  search_radius_km: number;
+  /** Origin location used for the search */
+  location: { latitude: number; longitude: number };
+  /** Confidence score (0–1) */
+  confidence: number;
+}
+
+export interface Facility {
+  name: string;
+  type: string;
+  address: string;
+  distance_km: number;
+  rating: number | null;
+  phone: string | null;
+  open_now: boolean | null;
+}
+
+// ─── Emergency Result (Track B) ─────────────────────────────────────────────
+
+export interface EmergencyResult {
+  /** Whether an emergency was detected */
+  is_emergency: boolean;
+  /** Emergency keywords found in the input */
+  detected_keywords: string[];
+  /** Severity classification */
+  severity: "NONE" | "MODERATE" | "HIGH" | "CRITICAL";
+  /** Actions that were triggered */
+  actions_taken: string[];
+  /** Confidence score (0–1) */
+  confidence: number;
 }
 
 // ─── Error Response ─────────────────────────────────────────────────────────
