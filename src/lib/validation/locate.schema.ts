@@ -37,8 +37,8 @@ export const FacilitySchema = z.object({
   rating: z.number().min(0).max(5).nullable(),
   /** Contact phone number, null if unavailable */
   phone: z.string().nullable(),
-  /** Whether the facility is currently open */
-  open_now: z.boolean().nullable(),
+  /** Whether the facility is currently open — undefined when data is unavailable */
+  open_now: z.boolean().optional(),
 });
 
 export const GeoLocatorResultSchema = z.object({

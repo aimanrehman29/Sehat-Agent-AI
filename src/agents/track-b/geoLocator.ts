@@ -3,100 +3,75 @@
  * geoLocator.ts — Nearest hospital lookup (Track B).
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * Uses the Google Maps Places API (mock) to find the nearest hospitals,
- * clinics, and pharmacies based on the patient's GPS coordinates.
+ * Uses the Google Places API (New) Nearby Search endpoint to find the
+ * nearest hospitals based on the patient's GPS coordinates.
  *
  * Input:  { latitude: 24.8607, longitude: 67.0011, type: "hospital" }
- * Output: [{ name: "Aga Khan Hospital", distance: "2.3 km", ... }]
- *
- * Mock implementation — returns realistic sample data for UI testing.
- * Replace with real Google Maps Places API calls in production.
+ * Output: [{ name: "Aga Khan Hospital", distance_km: 2.3, ... }]
  */
 
 import type { GeoLocatorResult, Facility } from "@/types/orchestrator";
 
-/**
- * Mock facility database — representative hospitals, clinics, and pharmacies
- * in the Karachi area for demo purposes.
- *
- * ⚠️  The phone numbers and ratings below are sample data and have NOT been
- * independently verified. They must be confirmed as accurate before being
- * shown to real users or relied on in a live demo.
- */
-const MOCK_FACILITIES: Facility[] = [
-  {
-    name: "Aga Khan University Hospital",
-    type: "hospital",
-    address: "Stadium Road, P.O. Box 3500, Karachi",
-    distance_km: 2.3,
-    rating: 4.5,
-    phone: "+92-21-111-911-911",
-    open_now: true,
-  },
-  {
-    name: "Jinnah Postgraduate Medical Centre",
-    type: "hospital",
-    address: "Rafique H.J. Shaheed Road, Karachi",
-    distance_km: 4.1,
-    rating: 3.8,
-    phone: "+92-21-99201300",
-    open_now: true,
-  },
-  {
-    name: "Dr. Ziauddin Hospital",
-    type: "hospital",
-    address: "Shahrah-e-Ghalib, Block 6, Clifton, Karachi",
-    distance_km: 5.7,
-    rating: 4.2,
-    phone: "+92-21-111-222-333",
-    open_now: true,
-  },
-  {
-    name: "MediCare Clinic — PECHS",
-    type: "clinic",
-    address: "Block 3, PECHS, Shahrah-e-Faisal, Karachi",
-    distance_km: 1.8,
-    rating: 4.0,
-    phone: "+92-21-34567890",
-    open_now: true,
-  },
-  {
-    name: "City Health Clinic",
-    type: "clinic",
-    address: "Tariq Road, Dhoraji Colony, Karachi",
-    distance_km: 3.2,
-    rating: 3.9,
-    phone: "+92-21-34987654",
-    open_now: false,
-  },
-  {
-    name: "D. Watson Pharmacy",
-    type: "pharmacy",
-    address: "Zamzama Boulevard, DHA Phase 5, Karachi",
-    distance_km: 0.8,
-    rating: 4.3,
-    phone: "+92-21-35832100",
-    open_now: true,
-  },
-  {
-    name: "Fazaldin Sons Pharmacy",
-    type: "pharmacy",
-    address: "Shaheed-e-Millat Expressway, KDA Scheme 1, Karachi",
-    distance_km: 2.5,
-    rating: 4.1,
-    phone: "+92-21-34123456",
-    open_now: true,
-  },
-];
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+const PLACES_API_URL = "https://places.googleapis.com/v1/places:searchNearby";
+
+/** Search radius in meters (10 km) */
+const SEARCH_RADIUS_METERS = 10_000;
+
+/** Maximum results per request */
+const MAX_RESULT_COUNT = 10;
 
 /**
- * Search for nearby medical facilities.
+ * Fields requested from Places API (New).
+ * Controls which data is returned per place and affects billing tier.
+ */
+const FIELD_MASK = [
+  "places.displayName",
+  "places.formattedAddress",
+  "places.location",
+  "places.rating",
+  "places.nationalPhoneNumber",
+  "places.currentOpeningHours.openNow",
+  "places.id",
+].join(",");
+
+// ─── Haversine Distance ─────────────────────────────────────────────────────
+
+const EARTH_RADIUS_KM = 6371;
+
+/**
+ * Calculate straight-line distance in kilometers between two GPS coordinates
+ * using the Haversine formula.
+ */
+function haversineDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ─── Main Search Function ───────────────────────────────────────────────────
+
+/**
+ * Search for nearby hospitals via the Google Places API (New) Nearby Search.
  *
  * @param latitude - GPS latitude of the patient
  * @param longitude - GPS longitude of the patient
- * @param facilityType - Filter by facility type (hospital, pharmacy, clinic)
- * @param _requestId - Request identifier for tracing (unused in mock)
- * @returns Mock geo-location result with nearby facilities
+ * @param facilityType - Accepted for API compatibility; specialty-based
+ *   filtering is not supported by the searchNearby endpoint. Results are
+ *   always hospitals.
+ * @param _requestId - Request identifier for tracing (unused currently)
+ * @returns GeoLocator result with nearby facilities sorted by distance
+ * @throws Error if GOOGLE_MAPS_API_KEY is missing or the API returns an error
  */
 export async function executeGeoLocate(
   latitude: number,
@@ -104,27 +79,105 @@ export async function executeGeoLocate(
   facilityType: string | undefined,
   _requestId: string
 ): Promise<GeoLocatorResult> {
-  // NOTE: latitude/longitude are accepted but NOT currently used in distance
-  // calculations. The distances in MOCK_FACILITIES are static sample values,
-  // not computed from the real input coordinates. This should not be mistaken
-  // for working geolocation — a real implementation would use the Haversine
-  // formula or the Google Maps Distance Matrix API.
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
 
-  // ── Filter facilities by type (if specified) ──
-  let filtered = MOCK_FACILITIES;
-  if (facilityType) {
-    filtered = MOCK_FACILITIES.filter((f) => f.type === facilityType);
+  if (!apiKey) {
+    throw new Error(
+      "[GeoLocator] GOOGLE_MAPS_API_KEY environment variable is not set. " +
+        "Add it to your .env file. You can obtain a key from the " +
+        "Google Cloud Console (enable the Places API (New) on the project)."
+    );
   }
 
-  // ── Sort by distance ──
-  filtered = [...filtered].sort((a, b) => a.distance_km - b.distance_km);
+  // NOTE: The searchNearby endpoint does not support keyword-based specialty
+  // filtering (the legacy API's `keyword` parameter has no equivalent here).
+  // Results are always hospitals. The `facilityType` parameter is accepted
+  // for interface compatibility but is not used in the API call.
+  void facilityType;
+
+  // ── Build request body ──
+  const requestBody = {
+    includedTypes: ["hospital"],
+    maxResultCount: MAX_RESULT_COUNT,
+    locationRestriction: {
+      circle: {
+        center: { latitude, longitude },
+        radius: SEARCH_RADIUS_METERS,
+      },
+    },
+  };
+
+  // ── Call Google Places API (New) Nearby Search ──
+  const apiResponse = await fetch(PLACES_API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": apiKey,
+      "X-Goog-FieldMask": FIELD_MASK,
+    },
+    body: JSON.stringify(requestBody),
+  });
+
+  const data = await apiResponse.json();
+
+  if (!apiResponse.ok) {
+    // Places API (New) returns errors as JSON: { error: { message, status } }
+    const errorMsg = data.error?.message ?? `${apiResponse.status} ${apiResponse.statusText}`;
+    throw new Error(
+      `[GeoLocator] Google Places API error: ${errorMsg}`
+    );
+  }
+
+  // ── Map results to Facility type ──
+  const facilities: Facility[] = (data.places ?? []).map(
+    (place: GooglePlaceResult) => {
+      const distance_km = parseFloat(
+        haversineDistance(
+          latitude,
+          longitude,
+          place.location.latitude,
+          place.location.longitude
+        ).toFixed(2)
+      );
+
+      return {
+        name: place.displayName?.text ?? "Unknown",
+        type: "hospital",
+        address: place.formattedAddress ?? "",
+        distance_km,
+        rating: place.rating ?? null,
+        phone: place.nationalPhoneNumber ?? null,
+        open_now: place.currentOpeningHours?.openNow,
+      };
+    }
+  );
+
+  // ── Sort by calculated distance (nearest first) ──
+  facilities.sort((a, b) => a.distance_km - b.distance_km);
 
   return {
-    facilities: filtered,
+    facilities,
     search_radius_km: 10,
     location: { latitude, longitude },
     // Placeholder confidence for the prototype — replace with a real
-    // confidence score once actual Google Maps Places API integration is in place.
+    // confidence score once the ranking/weighting logic is refined.
     confidence: 0.85,
   };
+}
+
+// ─── Places API (New) Response Types ────────────────────────────────────────
+
+interface GooglePlaceResult {
+  displayName?: { text: string; languageCode?: string };
+  formattedAddress?: string;
+  rating?: number;
+  nationalPhoneNumber?: string;
+  currentOpeningHours?: {
+    openNow?: boolean;
+  };
+  location: {
+    latitude: number;
+    longitude: number;
+  };
+  id?: string;
 }

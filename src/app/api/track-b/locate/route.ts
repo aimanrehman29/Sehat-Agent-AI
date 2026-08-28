@@ -2,10 +2,8 @@
  * POST /api/track-b/locate
  *
  * Nearest hospital lookup agent (Track B).
- * Uses GPS coordinates to find nearby hospitals, clinics, and pharmacies.
- *
- * Mock implementation — returns realistic sample data for UI testing.
- * Replace with real Google Maps Places API calls in production.
+ * Uses GPS coordinates and the Google Places API (New) searchNearby endpoint
+ * to find nearby hospitals.
  */
 
 import { NextResponse } from "next/server";
@@ -31,10 +29,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // ── Simulate API processing delay ──
-    await new Promise((r) => setTimeout(r, 1000));
-
-    // ── Execute geo-locator agent ──
+    // ── Execute geo-locator agent (calls Google Places API) ──
     const result = await executeGeoLocate(
       body.latitude,
       body.longitude,

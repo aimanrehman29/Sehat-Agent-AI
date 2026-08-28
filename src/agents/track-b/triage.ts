@@ -20,64 +20,112 @@ import type { TriageResult } from "@/types/orchestrator";
  * In production, this would use an NLP model or a medical knowledge graph.
  *
  * Each entry maps a canonical symptom key to its department routing and
- * a list of keyword variants covering English, Urdu/Roman Urdu, and
- * Hinglish descriptions that real users may type or speak.
+ * a set of token groups covering English, Urdu/Roman Urdu, and Hinglish
+ * descriptions that real users may type or speak.
+ *
+ * Matching is TOKEN-BASED: a symptom is detected when ALL tokens in any
+ * single group appear in the input text (in any order, with any words in
+ * between). This avoids the fragility of exact substring matching where
+ * inserted words like "shadeed" or "mein" break detection.
  */
 const SYMPTOM_RULES: Record<
   string,
-  { department: string; specialist: string | null; keywords: string[] }
+  { department: string; specialist: string | null; tokens: string[][] }
 > = {
   "chest pain": {
     department: "Cardiology",
     specialist: "Cardiologist",
-    keywords: ["chest pain", "seenay mein dard", "dil mein dard"],
+    tokens: [
+      ["chest", "pain"],
+      ["seenay", "dard"],
+      ["dil", "dard"],
+    ],
   },
   "shortness of breath": {
     department: "Pulmonology",
     specialist: "Pulmonologist",
-    keywords: ["shortness of breath", "saans nahi aa rahi", "saans phoolna"],
+    tokens: [
+      ["shortness", "breath"],
+      ["saans", "nahi"],
+      ["saans", "phoolna"],
+    ],
   },
   "headache": {
     department: "Neurology",
     specialist: "Neurologist",
-    keywords: ["headache", "sar dard"],
+    tokens: [
+      ["headache"],
+      ["sar", "dard"],
+    ],
   },
   "stomach pain": {
     department: "Gastroenterology",
     specialist: "Gastroenterologist",
-    keywords: ["stomach pain", "pait dard", "pet mein dard"],
+    tokens: [
+      ["stomach", "pain"],
+      ["pait", "dard"],
+      ["pet", "dard"],
+    ],
   },
   "fever": {
     department: "General Medicine",
     specialist: null,
-    keywords: ["fever", "bukhar"],
+    tokens: [
+      ["fever"],
+      ["bukhar"],
+    ],
   },
   "skin rash": {
     department: "Dermatology",
     specialist: "Dermatologist",
-    keywords: ["skin rash", "kharish", "daane"],
+    tokens: [
+      ["skin", "rash"],
+      ["kharish"],
+      ["daane"],
+    ],
   },
   "joint pain": {
     department: "Orthopedics",
     specialist: "Orthopedic Surgeon",
-    keywords: ["joint pain", "jodon ka dard"],
+    tokens: [
+      ["joint", "pain"],
+      ["jodon", "dard"],
+    ],
   },
   "dizziness": {
     department: "Neurology",
     specialist: "Neurologist",
-    keywords: ["dizziness", "chakkar aana", "sar ghoomna"],
+    tokens: [
+      ["dizziness"],
+      ["chakkar", "aana"],
+      ["sar", "ghoomna"],
+    ],
   },
   "cough": {
     department: "Pulmonology",
     specialist: "Pulmonologist",
-    keywords: ["cough", "khansi"],
+    tokens: [
+      ["cough"],
+      ["khansi"],
+    ],
   },
   "sore throat": {
     department: "ENT",
     specialist: "ENT Specialist",
-    keywords: ["sore throat", "gala kharab"],
+    tokens: [
+      ["sore", "throat"],
+      ["gala", "kharab"],
+    ],
   },
 };
+
+/**
+ * Token-based matching helper: returns true if ALL tokens in any single
+ * group are present in the word-set. Handles extra words between key terms.
+ */
+function matchesTokenGroups(words: Set<string>, groups: string[][]): boolean {
+  return groups.some((group) => group.every((token) => words.has(token)));
+}
 
 /** Canonical symptom keys whose detection should flag HIGH urgency */
 const HIGH_URGENCY_SYMPTOMS = new Set([
@@ -102,21 +150,19 @@ export async function executeTriage(
   _requestId: string
 ): Promise<TriageResult> {
   const lower = text.toLowerCase();
+  const words = new Set(lower.split(/\s+/));
   const keywordsDetected: string[] = [];
   let matchedDept = "General Medicine";
   let matchedSpecialist: string | null = null;
   let isHighUrgency = false;
 
   for (const [canonicalSymptom, rule] of Object.entries(SYMPTOM_RULES)) {
-    for (const variant of rule.keywords) {
-      if (lower.includes(variant)) {
-        keywordsDetected.push(variant);
-        matchedDept = rule.department;
-        matchedSpecialist = rule.specialist;
-        if (HIGH_URGENCY_SYMPTOMS.has(canonicalSymptom)) {
-          isHighUrgency = true;
-        }
-        break; // one match per canonical symptom is sufficient
+    if (matchesTokenGroups(words, rule.tokens)) {
+      keywordsDetected.push(canonicalSymptom);
+      matchedDept = rule.department;
+      matchedSpecialist = rule.specialist;
+      if (HIGH_URGENCY_SYMPTOMS.has(canonicalSymptom)) {
+        isHighUrgency = true;
       }
     }
   }

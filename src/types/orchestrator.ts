@@ -293,7 +293,7 @@ export interface Facility {
   distance_km: number;
   rating: number | null;
   phone: string | null;
-  open_now: boolean | null;
+  open_now?: boolean;
 }
 
 // ─── Emergency Result (Track B) ─────────────────────────────────────────────

@@ -24,29 +24,63 @@
 
 import type { EmergencyResult } from "@/types/orchestrator";
 
-/** Keywords that trigger emergency escalation (physical emergencies) */
-const EMERGENCY_KEYWORDS = [
-  "chest pain",
-  "can't breathe",
-  "cannot breathe",
-  "unconscious",
-  "severe bleeding",
-  "seizure",
-  "overdose",
-  "stroke",
-  "heart attack",
-  "choking",
-  "anaphylaxis",
-  "cardiac arrest",
-] as const;
+/**
+ * Token groups for physical emergency detection.
+ * Each group is a set of core significant words — if ALL words in any
+ * single group appear anywhere in the input, the emergency category matches.
+ * Covers English, Urdu/Roman Urdu, and Hinglish variants.
+ */
+const EMERGENCY_TOKEN_GROUPS: Array<{ canonical: string; tokens: string[][] }> = [
+  { canonical: "chest pain", tokens: [
+    ["chest", "pain"], ["seenay", "dard"], ["dil", "dard"],
+  ]},
+  { canonical: "can't breathe", tokens: [
+    ["can't", "breathe"], ["cannot", "breathe"], ["saans", "nahi"], ["saans", "phoolna"],
+  ]},
+  { canonical: "unconscious", tokens: [
+    ["unconscious"], ["behosh"],
+  ]},
+  { canonical: "severe bleeding", tokens: [
+    ["severe", "bleeding"], ["bleeding"], ["khoon", "beh"],
+  ]},
+  { canonical: "seizure", tokens: [
+    ["seizure"], ["daura"], ["mirgi"],
+  ]},
+  { canonical: "overdose", tokens: [
+    ["overdose"],
+  ]},
+  { canonical: "stroke", tokens: [
+    ["stroke"], ["falij"],
+  ]},
+  { canonical: "heart attack", tokens: [
+    ["heart", "attack"],
+  ]},
+  { canonical: "choking", tokens: [
+    ["choking"],
+  ]},
+  { canonical: "anaphylaxis", tokens: [
+    ["anaphylaxis"],
+  ]},
+  { canonical: "cardiac arrest", tokens: [
+    ["cardiac", "arrest"],
+  ]},
+];
 
-/** Keywords indicating a mental health crisis — handled separately from physical emergencies */
-const MENTAL_HEALTH_CRISIS_KEYWORDS = [
-  "suicidal",
-  "self-harm",
-  "kill myself",
-  "want to die",
-] as const;
+/**
+ * Token groups for mental health crisis detection.
+ * Handled separately from physical emergencies — always treated as CRITICAL.
+ */
+const MENTAL_HEALTH_TOKEN_GROUPS: Array<{ canonical: string; tokens: string[][] }> = [
+  { canonical: "suicidal", tokens: [
+    ["suicidal"], ["suicide"],
+  ]},
+  { canonical: "self-harm", tokens: [
+    ["self-harm"], ["self", "harm"],
+  ]},
+  { canonical: "want to die", tokens: [
+    ["kill", "myself"], ["want", "die"],
+  ]},
+];
 
 /**
  * Province → emergency service mapping.
@@ -86,6 +120,21 @@ const FIRST_AID_INSTRUCTIONS: Record<string, string> = {
 };
 
 /**
+ * Token-based matching helper: returns the canonical names of all
+ * emergency categories whose token groups match the input words.
+ */
+function findMatchingCategories(
+  words: Set<string>,
+  groups: Array<{ canonical: string; tokens: string[][] }>
+): string[] {
+  return groups
+    .filter(({ tokens }) =>
+      tokens.some((group) => group.every((token) => words.has(token)))
+    )
+    .map(({ canonical }) => canonical);
+}
+
+/**
  * Analyze text for emergency indicators and trigger escalation.
  *
  * @param text - Patient's message or voice transcript
@@ -99,12 +148,11 @@ export async function executeEmergencyCheck(
   province?: string
 ): Promise<EmergencyResult> {
   const lower = text.toLowerCase();
+  const words = new Set(lower.split(/\s+/));
   const emergencyService = resolveEmergencyService(province);
 
   // ── Check for mental health crisis first (takes priority) ──
-  const mentalHealthDetected = MENTAL_HEALTH_CRISIS_KEYWORDS.filter((kw) =>
-    lower.includes(kw)
-  );
+  const mentalHealthDetected = findMatchingCategories(words, MENTAL_HEALTH_TOKEN_GROUPS);
 
   if (mentalHealthDetected.length > 0) {
     // ── Mental health crisis — always CRITICAL, distinct response ──
@@ -129,9 +177,7 @@ export async function executeEmergencyCheck(
   }
 
   // ── Check for physical emergency keywords ──
-  const detectedKeywords = EMERGENCY_KEYWORDS.filter((kw) =>
-    lower.includes(kw)
-  );
+  const detectedKeywords = findMatchingCategories(words, EMERGENCY_TOKEN_GROUPS);
 
   const isEmergency = detectedKeywords.length > 0;
 
@@ -186,12 +232,13 @@ function resolveEmergencyService(
 /**
  * Quick synchronous check — call before routing to detect if emergency
  * escalation is needed. Checks BOTH physical emergency keywords and
- * mental health crisis keywords. Returns true if either is detected.
+ * mental health crisis keywords using token-based matching.
+ * Returns true if either is detected.
  */
 export function detectEmergency(text: string): boolean {
-  const lower = text.toLowerCase();
+  const words = new Set(text.toLowerCase().split(/\s+/));
   return (
-    EMERGENCY_KEYWORDS.some((kw) => lower.includes(kw)) ||
-    MENTAL_HEALTH_CRISIS_KEYWORDS.some((kw) => lower.includes(kw))
+    findMatchingCategories(words, EMERGENCY_TOKEN_GROUPS).length > 0 ||
+    findMatchingCategories(words, MENTAL_HEALTH_TOKEN_GROUPS).length > 0
   );
 }

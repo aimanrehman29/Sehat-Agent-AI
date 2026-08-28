@@ -32,6 +32,7 @@ const envSchema = z.object({
   // Track B / Orchestrator
   ORCHESTRATOR_URL: z.string().url().optional(),
   ORCHESTRATOR_API_KEY: z.string().optional(),
+  GOOGLE_MAPS_API_KEY: z.string().optional(),
 
   // Logging
   LOG_LEVEL: z
