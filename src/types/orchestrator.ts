@@ -111,7 +111,8 @@ export type AgentResultPayload =
   | CareSyncResult
   | TriageResult
   | GeoLocatorResult
-  | EmergencyResult;
+  | EmergencyResult
+  | BookingResult;
 
 // ─── Pharma-Check Result ────────────────────────────────────────────────────
 
@@ -315,6 +316,31 @@ export interface EmergencyResult {
   severity: "NONE" | "MODERATE" | "HIGH" | "CRITICAL";
   /** Actions that were triggered */
   actions_taken: string[];
+  /** Confidence score (0–1) */
+  confidence: number;
+}
+
+// ─── Booking Result (Track B — Auto-Booking) ─────────────────────────────────
+
+export interface BookingResult {
+  /** Patient name for the appointment */
+  patient_name: string;
+  /** Hospital or clinic name */
+  hospital_name: string;
+  /** Target department (e.g. Cardiology, Orthopedics) */
+  department: string;
+  /** Requested appointment date (ISO 8601 date) */
+  requested_date: string;
+  /** Requested appointment time (HH:mm format) */
+  requested_time: string;
+  /** Current booking status */
+  status: "CALL_INITIATED" | "CALL_COMPLETED" | "CALL_FAILED";
+  /** Twilio call SID for tracing */
+  call_sid: string | null;
+  /** Destination number the call was placed to (always the test number in prototype) */
+  call_destination: string;
+  /** Prototype safety note — call routed to test number, not the real hospital line */
+  prototype_note: string;
   /** Confidence score (0–1) */
   confidence: number;
 }
