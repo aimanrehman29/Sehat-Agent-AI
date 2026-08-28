@@ -22,6 +22,16 @@ const SEARCH_RADIUS_METERS = 10_000;
 /** Maximum results per request */
 const MAX_RESULT_COUNT = 10;
 
+/** Advisory note attached to facilities where Google has no opening-hours data */
+const HOURS_UNVERIFIED_NOTE =
+  "Opening hours could not be confirmed for this facility — please call ahead before traveling, especially at night.";
+
+/** Top-level disclaimer about open_now semantics */
+const OPEN_HOURS_DISCLAIMER =
+  "open_now reflects general facility operating hours as reported to Google. " +
+  "It does not confirm Emergency Room staffing, bed availability, or specialist " +
+  "on-duty status. For genuine emergencies, call ahead or dial emergency services.";
+
 /**
  * Fields requested from Places API (New).
  * Controls which data is returned per place and affects billing tier.
@@ -70,7 +80,7 @@ function haversineDistance(
  *   filtering is not supported by the searchNearby endpoint. Results are
  *   always hospitals.
  * @param _requestId - Request identifier for tracing (unused currently)
- * @returns GeoLocator result with nearby facilities sorted by distance
+ * @returns GeoLocator result with nearby facilities, open-first sorting, and nearest_open_facility
  * @throws Error if GOOGLE_MAPS_API_KEY is missing or the API returns an error
  */
 export async function executeGeoLocate(
@@ -140,6 +150,8 @@ export async function executeGeoLocate(
         ).toFixed(2)
       );
 
+      const openNow = place.currentOpeningHours?.openNow;
+
       return {
         name: place.displayName?.text ?? "Unknown",
         type: "hospital",
@@ -147,18 +159,32 @@ export async function executeGeoLocate(
         distance_km,
         rating: place.rating ?? null,
         phone: place.nationalPhoneNumber ?? null,
-        open_now: place.currentOpeningHours?.openNow,
+        open_now: openNow,
+        ...(openNow === undefined
+          ? { hours_unverified: true as const, hours_note: HOURS_UNVERIFIED_NOTE }
+          : {}),
       };
     }
   );
 
-  // ── Sort by calculated distance (nearest first) ──
-  facilities.sort((a, b) => a.distance_km - b.distance_km);
+  // ── Sort: confirmed-open facilities first, then by distance within each group ──
+  facilities.sort((a, b) => {
+    const aOpen = a.open_now === true ? 0 : 1;
+    const bOpen = b.open_now === true ? 0 : 1;
+    if (aOpen !== bOpen) return aOpen - bOpen;
+    return a.distance_km - b.distance_km;
+  });
+
+  // ── Determine nearest confirmed-open facility ──
+  const nearestOpen = facilities.find((f) => f.open_now === true);
+  const nearest_open_facility = nearestOpen?.name ?? null;
 
   return {
     facilities,
+    nearest_open_facility,
     search_radius_km: 10,
     location: { latitude, longitude },
+    open_hours_disclaimer: OPEN_HOURS_DISCLAIMER,
     // Placeholder confidence for the prototype — replace with a real
     // confidence score once the ranking/weighting logic is refined.
     confidence: 0.85,

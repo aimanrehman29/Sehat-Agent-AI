@@ -278,10 +278,14 @@ export interface TriageResult {
 export interface GeoLocatorResult {
   /** Nearby facilities found */
   facilities: Facility[];
+  /** Name of the closest facility confirmed open right now, or null if none */
+  nearest_open_facility: string | null;
   /** Search radius in kilometers */
   search_radius_km: number;
   /** Origin location used for the search */
   location: { latitude: number; longitude: number };
+  /** Disclaimer about open_now reflecting general hours, not ER staffing */
+  open_hours_disclaimer: string;
   /** Confidence score (0–1) */
   confidence: number;
 }
@@ -294,6 +298,10 @@ export interface Facility {
   rating: number | null;
   phone: string | null;
   open_now?: boolean;
+  /** True when Google has no opening-hours data for this facility */
+  hours_unverified?: boolean;
+  /** Advisory note when opening hours could not be confirmed */
+  hours_note?: string;
 }
 
 // ─── Emergency Result (Track B) ─────────────────────────────────────────────
