@@ -64,6 +64,15 @@ export interface ProcessedImage {
 
 // ─── Pharma-Check Internal Types ────────────────────────────────────────────
 
+/**
+ * DRAP authenticity status categories for the updated Pharma-Check response.
+ * Aligned with DRAP serialization mandate.
+ */
+export type AuthenticityStatus =
+  | "VERIFIED"
+  | "COULD NOT BE VERIFIED"
+  | "WARNING";
+
 export interface PharmaCheckInput {
   image_buffer: Buffer;
   image_mime_type: string;
@@ -82,6 +91,19 @@ export interface DrugLookupResult {
     batch_numbers: string[];
     expiry_dates: string[];
   } | null;
+}
+
+/**
+ * Updated Pharma-Check response fields (aligned with blueprint).
+ * These extend the existing internal result shape.
+ */
+export interface PharmaCheckResponseFields {
+  scanned_item: string;
+  drap_number: string;
+  authenticity_status: AuthenticityStatus;
+  reasoning: string;
+  recommended_action: string;
+  disclaimer: string;
 }
 
 // ─── Lingo-Med Internal Types ───────────────────────────────────────────────

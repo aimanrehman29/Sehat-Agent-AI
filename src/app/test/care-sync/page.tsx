@@ -14,6 +14,8 @@ export default function CareSyncTestPage() {
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState<number>(0);
+  const [reminderLoading, setReminderLoading] = useState(false);
+  const [reminderResult, setReminderResult] = useState<Record<string, unknown> | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   function handleFile(f: File) {
@@ -21,6 +23,7 @@ export default function CareSyncTestPage() {
     setPreview(URL.createObjectURL(f));
     setResult(null);
     setError(null);
+    setReminderResult(null);
   }
 
   async function analyze() {
@@ -53,8 +56,51 @@ export default function CareSyncTestPage() {
   const medicines = (r?.medicines || []) as Record<string, unknown>[];
   const reminders = (r?.reminders || []) as Record<string, unknown>[];
   const doctor = r?.doctor_info as Record<string, unknown> | undefined;
+  const prescriptionId = (r?.prescription_id as string) || null;
 
   const S = (v: unknown): string => (v == null ? "" : String(v));
+
+  async function activateReminders() {
+    if (!reminders.length || !prescriptionId) return;
+    setReminderLoading(true);
+    setReminderResult(null);
+
+    try {
+      const medicinesPayload = reminders
+        .filter((rem) => ((rem.cron_expressions as string[]) || []).length > 0)
+        .map((rem) => ({
+          medicine_name: rem.medicine_name as string,
+          cron_expressions: rem.cron_expressions as string[],
+          timezone: "Asia/Karachi",
+          channel: "push" as const,
+        }));
+
+      if (medicinesPayload.length === 0) {
+        setReminderResult({ success: false, message: "No medicines with scheduled reminders found." });
+        return;
+      }
+
+      const res = await fetch("/api/track-a/care-sync/reminders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: "test-user",
+          prescription_id: prescriptionId,
+          medicines: medicinesPayload,
+        }),
+      });
+
+      const data = await res.json();
+      setReminderResult(data as Record<string, unknown>);
+    } catch (e) {
+      setReminderResult({
+        success: false,
+        message: e instanceof Error ? e.message : "Failed to activate reminders",
+      });
+    } finally {
+      setReminderLoading(false);
+    }
+  }
 
   const formIcons: Record<string, string> = {
     tablet: "💊",
@@ -200,6 +246,54 @@ export default function CareSyncTestPage() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Set Medicine Reminders Button */}
+      {reminders.length > 0 && prescriptionId && (
+        <div className="bg-gradient-to-r from-purple-50 to-blue-50 rounded-xl border border-purple-200 p-6 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-sm font-semibold text-purple-800 uppercase tracking-wider">
+                Medication Reminders
+              </h3>
+              <p className="text-xs text-purple-600 mt-1">
+                Activate push notifications for {reminders.filter((rm) => ((rm.cron_expressions as string[]) || []).length > 0).length} medicine{reminders.filter((rm) => ((rm.cron_expressions as string[]) || []).length > 0).length !== 1 ? "s" : ""}.
+              </p>
+            </div>
+            <button
+              onClick={activateReminders}
+              disabled={reminderLoading}
+              className="px-5 py-2.5 rounded-lg font-medium text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed bg-purple-600 text-white hover:bg-purple-700 shadow-sm"
+            >
+              {reminderLoading ? (
+                <span className="flex items-center gap-2">
+                  <span className="animate-spin">⏳</span> Activating...
+                </span>
+              ) : (
+                "Set Medicine Reminders"
+              )}
+            </button>
+          </div>
+          {reminderResult && (
+            <div
+              className={`mt-3 rounded-lg p-3 text-sm ${
+                (reminderResult.success as boolean)
+                  ? "bg-green-50 border border-green-200 text-green-800"
+                  : "bg-red-50 border border-red-200 text-red-700"
+              }`}
+            >
+              <p className="font-medium">
+                {(reminderResult.success as boolean) ? "✅" : "⚠️"}{" "}
+                {S(reminderResult.message)}
+              </p>
+              {(reminderResult.activated_count as number) > 0 && (
+                <p className="text-xs mt-1 opacity-80">
+                  {reminderResult.activated_count as number} reminder{(reminderResult.activated_count as number) > 1 ? "s" : ""} created.
+                </p>
+              )}
+            </div>
+          )}
         </div>
       )}
 

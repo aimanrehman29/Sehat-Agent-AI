@@ -1,12 +1,18 @@
 /**
  * POST /api/track-a/pharma-check
  *
- * Mock implementation — returns realistic sample data for UI testing.
- * Replace with real agent logic in Task 6.
+ * Pharma-Check AI — Fake Medicine Detector.
+ * Performs 2D DataMatrix/barcode scanning aligned with DRAP serialization
+ * mandate, queries the DrugRegistry, and returns the updated response schema.
+ *
+ * All responses are wrapped in applyGuardrails() for fail-closed enforcement.
  */
 
 import { NextResponse } from "next/server";
 import { applyGuardrails, applyErrorGuardrail } from "@/lib/guardrails/disclaimer";
+import { PharmaCheckAgent } from "@/agents/track-a/pharmaCheck";
+
+const agent = new PharmaCheckAgent();
 
 export async function POST(request: Request) {
   const startTime = Date.now();
@@ -27,50 +33,12 @@ export async function POST(request: Request) {
       );
     }
 
-    // ── Simulate processing delay ──
-    await new Promise((r) => setTimeout(r, 1500));
-
-    // ── Mock result ──
-    const result = {
-      barcode: "8901234567890",
-      qr_data: "DRAP-0001-1234|Panadol|GSK",
-      drap_registration_no: "DRAP-0001-1234",
-      drug_found: true,
-      drug_info: {
-        drug_name: "Panadol",
-        registration_no: "DRAP-0001-1234",
-        manufacturer: "GlaxoSmithKline Pakistan",
-        batch_number: "PN-2025-001",
-        expiry_date: "2027-06-30",
-        category: "Analgesic",
-        is_active: true,
-      },
-      risk: {
-        level: "SAFE" as const,
-        score: 8,
-        factors: [
-          {
-            description: "DRAP registration number found and verified in registry",
-            severity: "info" as const,
-            weight: 0.9,
-          },
-          {
-            description: "Barcode matches registered product",
-            severity: "info" as const,
-            weight: 0.85,
-          },
-          {
-            description: "Batch number is valid and not expired",
-            severity: "info" as const,
-            weight: 0.95,
-          },
-        ],
-      },
-      warnings: [],
-    };
+    // ── Execute real agent pipeline ──
+    const requestId = crypto.randomUUID();
+    const result = await agent.execute(body, requestId);
 
     const response = applyGuardrails({
-      request_id: crypto.randomUUID(),
+      request_id: requestId,
       agent_source: "pharma-check",
       status: "success",
       result,

@@ -61,6 +61,17 @@ export const PharmaCheckResultSchema = z.object({
   drug_info: DrugRegistryInfoSchema.nullable(),
   risk: RiskAssessmentSchema,
   warnings: z.array(z.string()),
+  // ── Updated Blueprint Fields (DRAP serialization mandate) ──
+  scanned_item: z.string(),
+  drap_number: z.string(),
+  authenticity_status: z.enum([
+    "VERIFIED",
+    "COULD NOT BE VERIFIED",
+    "WARNING",
+  ]),
+  reasoning: z.string(),
+  recommended_action: z.string(),
+  disclaimer: z.string(),
 });
 
 export type PharmaCheckResult = z.infer<typeof PharmaCheckResultSchema>;

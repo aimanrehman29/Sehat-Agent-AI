@@ -130,7 +130,29 @@ export interface PharmaCheckResult {
   risk: RiskAssessment;
   /** Human-readable warnings */
   warnings: string[];
+
+  // ── Updated Blueprint Fields (DRAP serialization mandate) ──
+  /** Name/description of the scanned item */
+  scanned_item: string;
+  /** DRAP number extracted from packaging */
+  drap_number: string;
+  /** Authenticity status per DRAP verification */
+  authenticity_status: AuthenticityStatus;
+  /** Human-readable reasoning for the authenticity determination */
+  reasoning: string;
+  /** Recommended action for the user */
+  recommended_action: string;
+  /** Mandatory disclaimer text */
+  disclaimer: string;
 }
+
+/**
+ * DRAP authenticity status categories.
+ */
+export type AuthenticityStatus =
+  | "VERIFIED"
+  | "COULD NOT BE VERIFIED"
+  | "WARNING";
 
 export interface DrugRegistryInfo {
   drug_name: string;

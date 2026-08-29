@@ -5,6 +5,8 @@ const nextConfig = {
     serverActions: {
       bodySizeLimit: "10mb", // Allow larger medical image uploads
     },
+    /* Prevent webpack from bundling native Node.js packages on the server */
+    serverComponentsExternalPackages: ["tesseract.js", "sharp"],
   },
 
   /* Image optimization for medical image processing */

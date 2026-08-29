@@ -57,6 +57,13 @@ export default function PharmaCheckTestPage() {
   const risk = r?.risk as Record<string, unknown> | undefined;
   const drug = r?.drug_info as Record<string, unknown> | undefined;
 
+  const authStatus = r?.authenticity_status as string | undefined;
+  const authColors: Record<string, string> = {
+    VERIFIED: "bg-green-100 text-green-800 border-green-300",
+    WARNING: "bg-yellow-100 text-yellow-800 border-yellow-300",
+    "COULD NOT BE VERIFIED": "bg-red-100 text-red-800 border-red-300",
+  };
+
   const riskColors: Record<string, string> = {
     SAFE: "bg-green-100 text-green-800 border-green-300",
     LOW_RISK: "bg-blue-100 text-blue-800 border-blue-300",
@@ -146,6 +153,17 @@ export default function PharmaCheckTestPage() {
           )}
           {result && r && (
             <div className="space-y-3">
+              {/* DRAP Authenticity Status */}
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-gray-600">Authenticity</span>
+                <span className={`px-3 py-1 rounded-full text-xs font-bold border ${authColors[authStatus || ""] || "bg-gray-100 text-gray-600"}`}>
+                  {authStatus || "N/A"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-gray-600">Scanned Item</span>
+                <span className="text-sm font-semibold">{(r.scanned_item as string) || "—"}</span>
+              </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-gray-600">Risk Level</span>
                 <span className={`px-3 py-1 rounded-full text-xs font-bold border ${riskColors[(risk?.level as string) || ""] || "bg-gray-100 text-gray-600"}`}>
@@ -161,17 +179,26 @@ export default function PharmaCheckTestPage() {
                 <span className="text-sm font-semibold">{r.drug_found ? "✅ Yes" : "❌ No"}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">Barcode</span>
-                <code className="text-xs">{(r.barcode as string) || "Not found"}</code>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">DRAP Reg #</span>
-                <code className="text-xs">{(r.drap_registration_no as string) || "Not found"}</code>
+                <span className="text-sm text-gray-600">DRAP #</span>
+                <code className="text-xs">{String((r.drap_number as string) || (r.drap_registration_no as string) || "Not found")}</code>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-gray-600">Confidence</span>
                 <span className="text-sm font-semibold">{((result.confidence_score as number) * 100).toFixed(0)}%</span>
               </div>
+              {/* Reasoning & Action */}
+              {!!r.reasoning && (
+                <div className="bg-blue-50 rounded-lg p-3 mt-2">
+                  <p className="text-xs font-medium text-blue-500 mb-1">Analysis</p>
+                  <p className="text-sm text-blue-800">{String(r.reasoning)}</p>
+                </div>
+              )}
+              {!!r.recommended_action && (
+                <div className="bg-amber-50 rounded-lg p-3">
+                  <p className="text-xs font-medium text-amber-500 mb-1">Recommended Action</p>
+                  <p className="text-sm text-amber-800 font-medium">{String(r.recommended_action)}</p>
+                </div>
+              )}
               <div className="flex items-center justify-between text-xs text-gray-400 pt-2 border-t border-gray-100">
                 <span>Processing time</span>
                 <span>{elapsed}ms</span>
