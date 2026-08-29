@@ -21,10 +21,15 @@
  *   Image → OCR/Barcode/QR extraction → DRAP DB lookup → Risk scoring → JSON
  */
 
-import { prisma } from "@/lib/db";
+import { prisma, isDbAvailable } from "@/lib/db";
 import { scanImage } from "@/lib/ocr/barcode-reader";
 import { extractText } from "@/lib/ocr/text-extractor";
 import { logger } from "@/lib/logger";
+import {
+  transcribeVoicePayload,
+  type VoicePayload,
+} from "@/lib/voice/transcriber";
+import { buildPharmaAudioResponse, type AudioResponse } from "@/lib/voice/tts";
 
 // ─── Agent Class ────────────────────────────────────────────────────────
 
@@ -63,8 +68,22 @@ export class PharmaCheckAgent {
       { requestId }
     );
 
-    // ── Step 2: Extract DRAP number via OCR ──
-    const drapNo = await this.extractDRAPNumber(imageBuffer, qrData);
+    // ── Step 1b: Resolve voice transcript (e.g. user read out DRAP number) ──
+    const voicePayload = payload.voice_payload as VoicePayload | undefined;
+    let voiceTranscript = "";
+    if (voicePayload) {
+      const transcription = await transcribeVoicePayload(voicePayload, requestId);
+      voiceTranscript = transcription.transcript;
+      if (voiceTranscript) {
+        logger.info(
+          `[PharmaCheck] Voice transcript available (${transcription.source}): ${voiceTranscript.length} chars`,
+          { requestId }
+        );
+      }
+    }
+
+    // ── Step 2: Extract DRAP number via OCR (+ voice hint) ──
+    const drapNo = await this.extractDRAPNumber(imageBuffer, qrData, voiceTranscript);
     logger.debug(`[PharmaCheck] DRAP#: ${drapNo ?? "not found"}`, { requestId });
 
     // ── Step 3: Lookup against DrugRegistry database ──
@@ -111,6 +130,13 @@ export class PharmaCheckAgent {
       recommended_action: recommendedAction,
       disclaimer:
         "Sehat-Assist AI assists — it does not make medical decisions for you.",
+      // ── TTS spoken summary ──
+      audio_response: buildPharmaAudioResponse({
+        authenticity_status: authenticityStatus,
+        scanned_item: scannedItem,
+        recommended_action: recommendedAction,
+        risk,
+      }),
     };
   }
 
@@ -118,7 +144,8 @@ export class PharmaCheckAgent {
 
   private async extractDRAPNumber(
     imageBuffer: Buffer,
-    qrData: string | null
+    qrData: string | null,
+    voiceHint: string = ""
   ): Promise<string | null> {
     // Try to extract from QR data first
     if (qrData) {
@@ -129,6 +156,19 @@ export class PharmaCheckAgent {
       const parts = qrData.split("|");
       if (parts[0] && /^DRAP-\d{4}-\d{4}$/i.test(parts[0].trim())) {
         return parts[0].trim().toUpperCase();
+      }
+    }
+
+    // Try voice transcript as a hint (user may have read out the DRAP number)
+    if (voiceHint) {
+      const drapPattern = /DRAP[-\s]?\d{4}[-\s]?\d{4}/i;
+      const voiceMatch = voiceHint.match(drapPattern);
+      if (voiceMatch) {
+        return voiceMatch[0]
+          .replace(/\s/g, "")
+          .replace(/DRAP/i, "DRAP-")
+          .replace(/--/g, "-")
+          .toUpperCase();
       }
     }
 
@@ -163,6 +203,15 @@ export class PharmaCheckAgent {
     drapNo: string | null,
     requestId: string
   ): Promise<DrugInfo | null> {
+    // Fast-path: skip the round-trip entirely when DB is unreachable
+    if (!(await isDbAvailable())) {
+      logger.warn(
+        "[PharmaCheck] DB unavailable — skipping drug registry lookup, returning null",
+        { requestId }
+      );
+      return null;
+    }
+
     try {
       // Query by DRAP registration number
       if (drapNo) {
@@ -373,6 +422,11 @@ function buildNoImageResult(): PharmaCheckResult {
     recommended_action: "Please provide an image of the medicine packaging.",
     disclaimer:
       "Sehat-Assist AI assists — it does not make medical decisions for you.",
+    audio_response: buildPharmaAudioResponse({
+      authenticity_status: "COULD NOT BE VERIFIED",
+      scanned_item: "No image",
+      recommended_action: "Please provide an image of the medicine packaging.",
+    }),
   };
 }
 
@@ -398,6 +452,8 @@ interface PharmaCheckResult {
   reasoning: string;
   recommended_action: string;
   disclaimer: string;
+  // ── TTS spoken summary ──
+  audio_response?: AudioResponse;
 }
 
 interface DrugInfo {

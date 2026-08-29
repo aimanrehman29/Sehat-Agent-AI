@@ -6,6 +6,11 @@
 "use client";
 
 import { useState, useRef } from "react";
+import VoiceInputMic from "@/components/voice/VoiceInputMic";
+import VoiceResponsePlayer from "@/components/voice/VoiceResponsePlayer";
+import AgentFollowUpChat from "@/components/chat/AgentFollowUpChat";
+import type { VoiceRecording } from "@/lib/voice/recorder";
+import type { AudioResponse } from "@/lib/voice/tts";
 
 export default function CareSyncTestPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -16,6 +21,12 @@ export default function CareSyncTestPage() {
   const [elapsed, setElapsed] = useState<number>(0);
   const [reminderLoading, setReminderLoading] = useState(false);
   const [reminderResult, setReminderResult] = useState<Record<string, unknown> | null>(null);
+  const [voicePayload, setVoicePayload] = useState<{
+    audio_base64: string;
+    audio_mime_type: string;
+    transcript_text: string;
+  } | null>(null);
+  const [audioResponse, setAudioResponse] = useState<AudioResponse | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   function handleFile(f: File) {
@@ -38,12 +49,21 @@ export default function CareSyncTestPage() {
       const res = await fetch("/api/track-a/care-sync/parse", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ media_base64: base64, media_type: file.type }),
+        body: JSON.stringify({
+          media_base64: base64,
+          media_type: file.type,
+          ...(voicePayload && { voice_payload: voicePayload }),
+        }),
       });
       const data = await res.json();
       setElapsed(Math.round(performance.now() - t0));
       if (!res.ok) setError(data.error?.message || `HTTP ${res.status}`);
-      else setResult(data);
+      else {
+        setResult(data);
+        setAudioResponse(
+          (data?.result as Record<string, unknown>)?.audio_response as AudioResponse ?? null
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Request failed");
       setElapsed(Math.round(performance.now() - t0));
@@ -154,6 +174,22 @@ export default function CareSyncTestPage() {
             )}
           </div>
           {file && <p className="text-xs text-gray-400 mt-2 text-center">{file.name}</p>}
+
+          {/* Voice Input */}
+          <div className="mt-4">
+            <VoiceInputMic
+              accentClass="bg-purple-600 hover:bg-purple-700"
+              disabled={loading}
+              onRecordingReady={(r: VoiceRecording) =>
+                setVoicePayload({
+                  audio_base64: r.audioBase64,
+                  audio_mime_type: r.audioMimeType,
+                  transcript_text: r.transcriptText,
+                })
+              }
+              onClear={() => setVoicePayload(null)}
+            />
+          </div>
 
           <button
             onClick={analyze}
@@ -334,6 +370,22 @@ export default function CareSyncTestPage() {
           <pre className="mt-3 text-xs text-gray-700 whitespace-pre-wrap font-mono bg-white p-4 rounded-lg border">{S(r.raw_extracted_text)}</pre>
         </details>
       )}
+
+      {/* Voice Response Player */}
+      {audioResponse && (
+        <VoiceResponsePlayer
+          audioResponse={audioResponse}
+          autoPlay={false}
+          accentClass="bg-purple-600 hover:bg-purple-700"
+        />
+      )}
+
+      {/* Contextual Follow-Up Chat */}
+      <AgentFollowUpChat
+        initialContext={result}
+        agentTarget="care-sync"
+        accentClass="bg-purple-600 hover:bg-purple-700"
+      />
 
       {/* Disclaimer */}
       {result && (

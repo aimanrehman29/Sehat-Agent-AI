@@ -10,7 +10,7 @@
  */
 
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { prisma, isDbAvailable } from "@/lib/db";
 import {
   ActivateRemindersRequestSchema,
   type ActivateRemindersResponse,
@@ -27,6 +27,22 @@ export async function POST(request: Request) {
 
     // ── Validate request ──
     const validated = ActivateRemindersRequestSchema.parse(body);
+
+    // ── Guard: return clean 503 when DB is down ──
+    if (!(await isDbAvailable())) {
+      log.warn("DB unavailable — cannot activate reminders", {
+        prescriptionId: body.prescription_id,
+      });
+      const fallback: ActivateRemindersResponse = {
+        success: false,
+        activated_count: 0,
+        reminder_ids: [],
+        message:
+          "Reminder scheduling is temporarily unavailable (database offline). " +
+          "Please try again later.",
+      };
+      return NextResponse.json(fallback, { status: 503 });
+    }
 
     // ── Create MedicationReminder records ──
     const reminderIds: string[] = [];

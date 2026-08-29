@@ -12,6 +12,8 @@ export const AGENTS = {
   TRIAGE: "triage",
   GEO_LOCATOR: "geo-locator",
   EMERGENCY: "emergency",
+  VOICE_TRANSCRIBE: "voice-transcribe",
+  CHAT: "agent-chat",
 } as const;
 
 export type AgentId = (typeof AGENTS)[keyof typeof AGENTS];

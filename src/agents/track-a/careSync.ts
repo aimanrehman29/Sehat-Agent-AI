@@ -22,9 +22,14 @@
  *   "as needed"       → no cron, manual trigger
  */
 
-import { prisma } from "@/lib/db";
+import { prisma, isDbAvailable } from "@/lib/db";
 import { extractText } from "@/lib/ocr/text-extractor";
 import { logger } from "@/lib/logger";
+import {
+  transcribeVoicePayload,
+  type VoicePayload,
+} from "@/lib/voice/transcriber";
+import { buildCareAudioResponse, type AudioResponse } from "@/lib/voice/tts";
 
 // ─── Cron Defaults ──────────────────────────────────────────────────────
 
@@ -72,6 +77,21 @@ export class CareSyncAgent {
       }
     }
 
+    // ── Step 1b: Resolve voice transcript and append to OCR context ──
+    const voicePayload = payload.voice_payload as VoicePayload | undefined;
+    if (voicePayload) {
+      const transcription = await transcribeVoicePayload(voicePayload, requestId);
+      if (transcription.transcript) {
+        rawText = rawText
+          ? `${rawText}\n\n[Voice context]: ${transcription.transcript}`
+          : transcription.transcript;
+        logger.info(
+          `[CareSync] Voice transcript merged (${transcription.source}): ${transcription.transcript.length} chars`,
+          { requestId }
+        );
+      }
+    }
+
     // ── Step 2: Parse medicines ──
     const medicines = await this.parseMedicines(rawText);
     logger.info(`[CareSync] Found ${medicines.length} medicines`, { requestId });
@@ -103,6 +123,12 @@ export class CareSyncAgent {
       raw_extracted_text: rawText,
       prescription_id: prescriptionId,
       confidence: 0.91,
+      // ── TTS spoken summary ──
+      audio_response: buildCareAudioResponse({
+        medicines,
+        doctor_info: doctorInfo,
+        prescription_id: prescriptionId,
+      }),
     };
   }
 
@@ -279,6 +305,15 @@ export class CareSyncAgent {
     medicines: ParsedMedicine[],
     requestId: string
   ): Promise<string | null> {
+    // Fast-path: skip entirely when DB is unreachable
+    if (!(await isDbAvailable())) {
+      logger.warn(
+        "[CareSync] DB unavailable — prescription not persisted, continuing with mock prescription_id",
+        { requestId }
+      );
+      return null;
+    }
+
     try {
       const prescription = await prisma.prescription.create({
         data: {
@@ -416,4 +451,5 @@ interface CareSyncResult {
   raw_extracted_text: string;
   prescription_id: string | null;
   confidence: number;
+  audio_response?: AudioResponse;
 }

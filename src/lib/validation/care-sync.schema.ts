@@ -4,6 +4,7 @@
  */
 
 import { z } from "zod";
+import { VoicePayloadSchema } from "./pharma-check.schema";
 
 // ─── Request Schema ─────────────────────────────────────────────────────────
 
@@ -22,6 +23,8 @@ export const CareSyncParseRequestSchema = z.object({
   query: z.string().max(500).optional(),
   /** User identifier */
   user_id: z.string().max(100).optional(),
+  /** Optional voice input — audio or pre-transcribed text */
+  voice_payload: VoicePayloadSchema.optional(),
 }).refine(
   (data) => data.media_base64 || data.media_url,
   { message: "Either media_base64 or media_url must be provided" }

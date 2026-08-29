@@ -19,9 +19,14 @@
  *   The response wrapper enforces this at the architecture level.
  */
 
-import { prisma } from "@/lib/db";
+import { prisma, isDbAvailable } from "@/lib/db";
 import { extractText } from "@/lib/ocr/text-extractor";
 import { logger } from "@/lib/logger";
+import {
+  transcribeVoicePayload,
+  type VoicePayload,
+} from "@/lib/voice/transcriber";
+import { buildLingoAudioResponse, type AudioResponse } from "@/lib/voice/tts";
 
 // ─── Agent Class ────────────────────────────────────────────────────────
 
@@ -57,6 +62,21 @@ export class LingoMedAgent {
           requestId,
           error: error instanceof Error ? error.message : String(error),
         });
+      }
+    }
+
+    // ── Step 1b: Resolve voice transcript and append to OCR context ──
+    const voicePayload = payload.voice_payload as VoicePayload | undefined;
+    if (voicePayload) {
+      const transcription = await transcribeVoicePayload(voicePayload, requestId);
+      if (transcription.transcript) {
+        rawText = rawText
+          ? `${rawText}\n\n[Voice context]: ${transcription.transcript}`
+          : transcription.transcript;
+        logger.info(
+          `[LingoMed] Voice transcript merged (${transcription.source}): ${transcription.transcript.length} chars`,
+          { requestId }
+        );
       }
     }
 
@@ -102,6 +122,12 @@ export class LingoMedAgent {
       summary,
       explanations,
       confidence: 0.88,
+      // ── TTS spoken summary ──
+      audio_response: buildLingoAudioResponse({
+        summary,
+        flagged_metrics: flagged,
+        patient_info: patientInfo,
+      }),
     };
   }
 
@@ -212,9 +238,116 @@ export class LingoMedAgent {
 
   // ── Patient Info Extraction ──
 
-  private extractPatientInfo(_rawText: string): PatientInfo | null {
-    // TODO: Parse patient name, age, gender from report header
-    return null;
+  /**
+   * Parse patient demographic information from the top section of a lab report.
+   *
+   * Handles the most common Pakistani/South-Asian lab report header formats:
+   *
+   *   Patient Name:  Muhammad Ali          Name: Ali Hassan
+   *   Age / Sex:     35 years / M          Age: 35  Sex: Male
+   *   Lab:           Agha Khan Laboratory  Date: 12/08/2026
+   *   Date:          15-08-2026
+   *
+   * Returns null if no recognizable patient data is found (e.g. blank image).
+   */
+  private extractPatientInfo(rawText: string): PatientInfo | null {
+    if (!rawText || rawText.trim().length === 0) return null;
+
+    // Work on the first 40 lines where the header lives
+    const headerLines = rawText
+      .split("\n")
+      .slice(0, 40)
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    const headerBlock = headerLines.join("\n");
+
+    // ── Name ──────────────────────────────────────────────────────────
+    // Matches: "Patient Name: Muhammad Ali", "Name: Ali", "Patient: Ahmed Khan"
+    const namePatterns = [
+      /patient\s+name\s*[:\-]\s*([A-Za-z][A-Za-z\s.]{1,50})/i,
+      /name\s*[:\-]\s*([A-Za-z][A-Za-z\s.]{1,50})/i,
+      /patient\s*[:\-]\s*([A-Za-z][A-Za-z\s.]{1,50})/i,
+    ];
+    let name: string | undefined;
+    for (const re of namePatterns) {
+      const m = headerBlock.match(re);
+      if (m && m[1].trim().length > 1) {
+        // Drop trailing noise words (age, sex, date artefacts)
+        name = m[1].trim().replace(/\s+(age|sex|dob|date|mr|ms|mrs).*$/i, "");
+        break;
+      }
+    }
+
+    // ── Age ───────────────────────────────────────────────────────────
+    // Matches: "Age: 35", "Age/Sex: 35Y/M", "35 years", "35 Yrs"
+    const agePatterns = [
+      /age\s*[:/\-]\s*(\d{1,3})\s*(?:years?|yrs?|y\b)?/i,
+      /\b(\d{1,3})\s*(?:years?|yrs?)\b/i,
+    ];
+    let age: number | undefined;
+    for (const re of agePatterns) {
+      const m = headerBlock.match(re);
+      if (m) {
+        const parsed = parseInt(m[1], 10);
+        if (parsed > 0 && parsed < 130) {
+          age = parsed;
+          break;
+        }
+      }
+    }
+
+    // ── Gender ────────────────────────────────────────────────────────
+    // Matches: "Sex: Male", "Gender: F", "M / 35", "age/sex: 35/M"
+    const genderPattern =
+      /(?:sex|gender)\s*[:\-/]\s*(male|female|m\b|f\b)|(?:age\/sex\s*:\s*\d+\s*\/\s*(male|female|m\b|f\b))/i;
+    let gender: string | undefined;
+    const gm = headerBlock.match(genderPattern);
+    if (gm) {
+      const raw = (gm[1] ?? gm[2] ?? "").trim().toLowerCase();
+      if (raw === "m") gender = "Male";
+      else if (raw === "f") gender = "Female";
+      else gender = raw.charAt(0).toUpperCase() + raw.slice(1);
+    }
+
+    // ── Report date ───────────────────────────────────────────────────
+    // Matches: "Date: 15/08/2026", "Date: 15-Aug-2026", "2026-08-15"
+    const datePatterns = [
+      /(?:report\s+)?date\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+      /(?:report\s+)?date\s*[:\-]\s*(\d{1,2}[\/\-][A-Za-z]{3}[\/\-]\d{2,4})/i,
+      /(\d{4}-\d{2}-\d{2})/,
+    ];
+    let report_date: string | undefined;
+    for (const re of datePatterns) {
+      const m = headerBlock.match(re);
+      if (m) {
+        report_date = m[1].trim();
+        break;
+      }
+    }
+
+    // ── Lab name ──────────────────────────────────────────────────────
+    // Matches: "Lab: Aga Khan", "Laboratory: City Lab", "Lab Name: ..."
+    const labPattern =
+      /(?:lab(?:oratory)?(?:\s+name)?)\s*[:\-]\s*([A-Za-z0-9][A-Za-z0-9\s,.-]{2,60})/i;
+    let lab_name: string | undefined;
+    const lm = headerBlock.match(labPattern);
+    if (lm) {
+      lab_name = lm[1].trim().replace(/\s{2,}/g, " ");
+    }
+
+    // Return null only when we found nothing at all
+    if (!name && age === undefined && !gender && !report_date && !lab_name) {
+      return null;
+    }
+
+    return {
+      ...(name && { name }),
+      ...(age !== undefined && { age }),
+      ...(gender && { gender }),
+      ...(report_date && { report_date }),
+      ...(lab_name && { lab_name }),
+    };
   }
 
   // ── Database Persistence ──
@@ -228,6 +361,15 @@ export class LingoMedAgent {
     summary: string,
     requestId: string
   ): Promise<void> {
+    // Fast-path: skip entirely when DB is unreachable
+    if (!(await isDbAvailable())) {
+      logger.warn(
+        "[LingoMed] DB unavailable — lab report not persisted, analysis result returned without storage",
+        { requestId }
+      );
+      return;
+    }
+
     try {
       const explanationMap = new Map(
         explanations.map((e) => [e.test_name, e])
@@ -331,4 +473,5 @@ interface LingoMedResult {
   summary: string;
   explanations: MetricExplanation[];
   confidence: number;
+  audio_response?: AudioResponse;
 }
