@@ -25,6 +25,8 @@ export const BookingRequestSchema = z.object({
   user_id: z.string().max(100).optional(),
   /** Session identifier for multi-turn conversations */
   session_id: z.string().max(100).optional(),
+  /** Distance to hospital in km (from GeoLocator, passed through to E-Parchi) */
+  distanceKm: z.number().min(0).optional(),
 });
 
 export type BookingRequest = z.infer<typeof BookingRequestSchema>;
@@ -43,13 +45,21 @@ export const BookingResultSchema = z.object({
   /** Requested appointment time (HH:mm format) */
   requested_time: z.string().min(1),
   /** Current booking status */
-  status: z.enum(["CALL_INITIATED", "CALL_COMPLETED", "CALL_FAILED"]),
+  status: z.enum(["CALL_INITIATED", "CONFIRMED", "CALL_COMPLETED", "CALL_FAILED"]),
   /** Twilio call SID for tracing */
   call_sid: z.string().nullable(),
   /** Destination number the call was placed to (always the test number in prototype) */
   call_destination: z.string().min(1),
   /** Prototype safety note */
   prototype_note: z.string().min(1),
+  /** Raw transcription of the receptionist's spoken response (for audit/transparency) */
+  raw_receptionist_response: z.string().optional(),
+  /** Distance to the hospital in km (from GeoLocator, if provided by the caller) */
+  distance_km: z.number().min(0).optional(),
+  /** E-Parchi display message (e.g. "Show this pass at counter" when confirmed) */
+  e_parchi_message: z.string().optional(),
+  /** Call origin — "twilio" for real Twilio calls, "simulated" for browser demo */
+  source: z.enum(["twilio", "simulated"]).optional(),
   /** Confidence score (0–1) */
   confidence: z.number().min(0).max(1),
 });

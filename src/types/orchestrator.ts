@@ -334,13 +334,21 @@ export interface BookingResult {
   /** Requested appointment time (HH:mm format) */
   requested_time: string;
   /** Current booking status */
-  status: "CALL_INITIATED" | "CALL_COMPLETED" | "CALL_FAILED";
+  status: "CALL_INITIATED" | "CONFIRMED" | "CALL_COMPLETED" | "CALL_FAILED";
   /** Twilio call SID for tracing */
   call_sid: string | null;
   /** Destination number the call was placed to (always the test number in prototype) */
   call_destination: string;
   /** Prototype safety note — call routed to test number, not the real hospital line */
   prototype_note: string;
+  /** Raw transcription of the receptionist's spoken response (for audit/transparency) */
+  raw_receptionist_response?: string;
+  /** Distance to the hospital in km (from GeoLocator, if provided by the caller) */
+  distance_km?: number;
+  /** E-Parchi display message (e.g. "Show this pass at counter" when confirmed) */
+  e_parchi_message?: string;
+  /** Call origin — "twilio" for real Twilio calls, "simulated" for browser Web Speech API demo */
+  source?: "twilio" | "simulated";
   /** Confidence score (0–1) */
   confidence: number;
 }

@@ -9,8 +9,8 @@
  * appointment request details. A digital E-Parchi (appointment slip) is then
  * generated with the booking status.
  *
- * Input:  { patientName, department, hospitalName, requestedTime }
- * Output: E-Parchi with status "CALL_INITIATED" and Twilio call SID
+ * Input:  { patientName, department, hospitalName, requestedTime, distanceKm? }
+ * Output: E-Parchi with status "CALL_INITIATED" (or "CONFIRMED" after receptionist response)
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * LOCAL TESTING NOTE:
@@ -25,18 +25,52 @@
  */
 
 import type { BookingResult } from "@/types/orchestrator";
+import {
+  PROTOTYPE_NOTE,
+  CONFIRMED_EPARCHI_MESSAGE,
+  isConfirmationDetected,
+} from "./bookingScript";
+
+// Re-export shared functions so server-side consumers (e.g. /confirm route)
+// can import from this module without needing to know about bookingScript.ts.
+export { isConfirmationDetected, buildBookingScript } from "./bookingScript";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
+// PROTOTYPE_NOTE and CONFIRMED_EPARCHI_MESSAGE are imported from bookingScript.ts
+// to keep the script text as a single source of truth across Twilio and simulated paths.
+
+// ─── In-Memory Call Store ───────────────────────────────────────────────────
+
 /**
- * Prototype safety note — always attached to every E-Parchi generated.
- * In this prototype phase, the Twilio call is placed ONLY to the developer's
- * test number, never to a real hospital phone line.
+ * In-memory store for active call state between the initial booking request
+ * and the Twilio confirmation webhook. Keyed by Twilio call SID.
+ *
+ * PROTOTYPE LIMITATION: This Map lives in Node.js process memory and will
+ * NOT survive a server restart or a cold-start in serverless deployments.
+ * In production, replace this with a persistent store (Redis, Prisma/Postgres,
+ * or Twilio's own Call resource metadata).
  */
-const PROTOTYPE_NOTE =
-  "PROTOTYPE: This call was routed to the developer's test number " +
-  "(TWILIO_TEST_NUMBER), not the hospital's actual phone line. " +
-  "In production, the call would be placed to the hospital's appointment desk.";
+const activeCallStore = new Map<
+  string,
+  {
+    callSid: string;
+    patientName: string;
+    department: string;
+    hospitalName: string;
+    requestedDate: string;
+    requestedTime: string;
+    callDestination: string;
+    status: "CALL_INITIATED" | "CONFIRMED" | "CALL_COMPLETED" | "CALL_FAILED";
+    rawReceptionistResponse?: string;
+    distanceKm?: number;
+  }
+>();
+
+/** Export the store so the /confirm route can read it for diagnostics. */
+export function getActiveCallStore() {
+  return activeCallStore;
+}
 
 // ─── Twilio Client ──────────────────────────────────────────────────────────
 
@@ -158,6 +192,58 @@ function buildTwimlUrl(
   return `${baseUrl}/api/track-b/book/twiml?${params.toString()}`;
 }
 
+// ─── Confirmation Analysis ─────────────────────────────────────────────────
+
+// isConfirmationDetected() is imported from bookingScript.ts and re-exported above.
+// The confirmation keyword set and time pattern live there as the single source of truth.
+
+/**
+ * Update the booking status after receiving the receptionist's speech
+ * transcription from Twilio's /confirm webhook.
+ *
+ * - If a confirmation keyword or time pattern is detected in the transcript,
+ *   the status changes from CALL_INITIATED → CONFIRMED.
+ * - Otherwise, the status remains CALL_INITIATED and the raw transcript is
+ *   stored for audit/transparency purposes.
+ *
+ * @param callSid - Twilio call SID identifying the call
+ * @param transcript - Speech-to-text transcription of the receptionist's response
+ * @returns Updated BookingResult, or null if the call SID is not in the store
+ */
+export function updateBookingStatus(
+  callSid: string,
+  transcript: string
+): BookingResult | null {
+  const stored = activeCallStore.get(callSid);
+  if (!stored) {
+    return null;
+  }
+
+  const confirmed = isConfirmationDetected(transcript);
+
+  stored.rawReceptionistResponse = transcript;
+  stored.status = confirmed ? "CONFIRMED" : stored.status;
+  activeCallStore.set(callSid, stored);
+
+  return {
+    patient_name: stored.patientName,
+    hospital_name: stored.hospitalName,
+    department: stored.department,
+    requested_date: stored.requestedDate,
+    requested_time: stored.requestedTime,
+    status: stored.status,
+    call_sid: stored.callSid,
+    call_destination: stored.callDestination,
+    prototype_note: PROTOTYPE_NOTE,
+    raw_receptionist_response: transcript,
+    ...(stored.distanceKm !== undefined ? { distance_km: stored.distanceKm } : {}),
+    ...(stored.status === "CONFIRMED"
+      ? { e_parchi_message: CONFIRMED_EPARCHI_MESSAGE }
+      : {}),
+    confidence: confirmed ? 0.88 : 0.65,
+  };
+}
+
 // ─── Main Booking Function ──────────────────────────────────────────────────
 
 /**
@@ -173,6 +259,7 @@ function buildTwimlUrl(
  * @param hospitalName - Hospital or clinic name
  * @param requestedTime - Requested appointment date/time (ISO 8601 string)
  * @param _requestId - Request identifier for tracing (unused currently)
+ * @param distanceKm - Optional distance to hospital in km (from GeoLocator)
  * @returns E-Parchi booking result with call status and Twilio SID
  * @throws Error if Twilio credentials are missing or the API call fails
  */
@@ -181,7 +268,8 @@ export async function executeAutoBooking(
   department: string,
   hospitalName: string,
   requestedTime: string,
-  _requestId: string
+  _requestId: string,
+  distanceKm?: number
 ): Promise<BookingResult> {
   // ── Resolve environment configuration (throws on missing vars) ──
   const client = getTwilioClient();
@@ -210,7 +298,7 @@ export async function executeAutoBooking(
 
   // ── Place the outbound call via Twilio ──
   let callSid: string | null = null;
-  let callStatus: "CALL_INITIATED" | "CALL_COMPLETED" | "CALL_FAILED";
+  let callStatus: "CALL_INITIATED" | "CONFIRMED" | "CALL_COMPLETED" | "CALL_FAILED";
 
   try {
     const call = await client.calls.create({
@@ -222,6 +310,19 @@ export async function executeAutoBooking(
 
     callSid = call.sid;
     callStatus = "CALL_INITIATED";
+
+    // ── Persist call state in the in-memory store for the /confirm webhook ──
+    activeCallStore.set(call.sid, {
+      callSid: call.sid,
+      patientName,
+      department,
+      hospitalName,
+      requestedDate: dateStr,
+      requestedTime: timeStr,
+      callDestination: toNumber,
+      status: "CALL_INITIATED",
+      ...(distanceKm !== undefined ? { distanceKm } : {}),
+    });
   } catch (twilioError: unknown) {
     const errMsg =
       twilioError instanceof Error ? twilioError.message : "Unknown Twilio error";
@@ -243,6 +344,7 @@ export async function executeAutoBooking(
     call_sid: callSid,
     call_destination: toNumber,
     prototype_note: PROTOTYPE_NOTE,
+    ...(distanceKm !== undefined ? { distance_km: distanceKm } : {}),
     // Placeholder confidence for the prototype — replace with a real
     // confidence score once call-outcome analysis is integrated.
     confidence: 0.80,

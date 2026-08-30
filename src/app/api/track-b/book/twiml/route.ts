@@ -14,12 +14,14 @@
  *   - hospitalName: hospital or clinic name
  *   - requestedTime: human-readable date and time string
  *
- * NOTE: This is a scripted announcement only — real-time dynamic AI
- * conversation with the receptionist (live speech recognition mid-call)
- * is out of scope for this hackathon prototype.
+ * NOTE: This is a single-turn exchange — the AI speaks the appointment
+ * request and then uses <Gather input="speech"> to capture the
+ * receptionist's spoken response. Full dynamic NLU conversation is out
+ * of scope for this hackathon prototype.
  */
 
 import { NextResponse } from "next/server";
+import { buildBookingScript } from "@/agents/track-b/bookingScript";
 
 // ─── TwiML XML Helpers ──────────────────────────────────────────────────────
 
@@ -37,10 +39,17 @@ function escapeXml(text: string): string {
 }
 
 /**
- * Build a complete TwiML <Response> document with one or more <Say> verbs.
+ * Build a complete TwiML <Response> document with <Say> verbs and a
+ * <Gather> block to capture the receptionist's spoken response.
  * Uses voice="Polly.Amy" (female English TTS) — Twilio's built-in TTS.
  * The language is set to "en-IN" for South Asian English pronunciation,
  * which produces more natural Urdu/Roman Urdu phrasing than "en-US".
+ *
+ * The <Gather> action URL points to /api/track-b/book/confirm which
+ * Twilio will POST to with the SpeechResult field.
+ *
+ * Script text is imported from the shared bookingScript module to stay
+ * identical to the simulated-call browser component.
  */
 function buildTwimlResponse(
   patientName: string,
@@ -48,28 +57,25 @@ function buildTwimlResponse(
   hospitalName: string,
   requestedTime: string
 ): string {
-  const safeName = escapeXml(patientName);
-  const safeDept = escapeXml(department);
-  const safeHospital = escapeXml(hospitalName);
-  const safeTime = escapeXml(requestedTime);
+  const script = buildBookingScript(patientName, department, hospitalName, requestedTime);
+  const safeOpening = escapeXml(script.opening);
+  const safeRequest = escapeXml(script.request);
+  const safePrompt = escapeXml(script.prompt);
+  const safeAsk = escapeXml("Kya aap yeh appointment confirm kar saktay hain?");
+  const safeNoResponse = escapeXml(script.closingNoResponse);
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Amy" language="en-IN">
-    Assalam-o-Alaikum. Main Sehat-Assist AI hoon, ek AI health navigation assistant.
-    Main ${safeName} ki taraf se appointment ke liye baat kar raha hoon.
-  </Say>
+  <Say voice="Polly.Amy" language="en-IN">${safeOpening}</Say>
   <Pause length="1"/>
-  <Say voice="Polly.Amy" language="en-IN">
-    ${safeName} ko ${safeDept} department mein appointment chahiye,
-    ${safeHospital} mein, ${safeTime} par.
-  </Say>
+  <Say voice="Polly.Amy" language="en-IN">${safeRequest}</Say>
   <Pause length="1"/>
-  <Say voice="Polly.Amy" language="en-IN">
-    Yeh call Sehat-Assist AI prototype ki taraf se hai.
-    Barah-e-karam appointment ki confirmation ke liye wapas call karein.
-    Shukriya.
-  </Say>
+  <Say voice="Polly.Amy" language="en-IN">${safePrompt}</Say>
+  <Gather input="speech" speechTimeout="auto" action="/api/track-b/book/confirm" method="POST" language="en-IN">
+    <Say voice="Polly.Amy" language="en-IN">${safeAsk}</Say>
+  </Gather>
+  <!-- If Gather times out without speech, fall through to this closing message -->
+  <Say voice="Polly.Amy" language="en-IN">${safeNoResponse}</Say>
 </Response>`;
 }
 

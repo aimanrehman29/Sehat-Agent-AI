@@ -48,7 +48,8 @@ export async function POST(request: Request) {
       body.department,
       body.hospitalName,
       body.requestedTime,
-      requestId
+      requestId,
+      body.distanceKm
     );
 
     const response = applyGuardrails({
