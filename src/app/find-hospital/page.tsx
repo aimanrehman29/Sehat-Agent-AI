@@ -22,10 +22,13 @@ interface LocateResponse {
     nearest_open_facility: string | null;
     search_radius_km: number;
     open_hours_disclaimer: string;
+    ranking_strategy_used: "nearest" | "best" | "balanced";
   };
   status?: string;
   error?: { code: string; message: string };
 }
+
+type RankingStrategy = "nearest" | "best" | "balanced";
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
@@ -34,6 +37,7 @@ export default function FindHospitalPage() {
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
   const [facilityType, setFacilityType] = useState("hospital");
+  const [rankingStrategy, setRankingStrategy] = useState<RankingStrategy>("balanced");
 
   // ── Result state ──
   const [searchState, setSearchState] = useState<SearchState>("idle");
@@ -92,6 +96,7 @@ export default function FindHospitalPage() {
           latitude: lat,
           longitude: lng,
           facility_type: facilityType || undefined,
+          rankingStrategy,
         }),
       });
 
@@ -116,7 +121,7 @@ export default function FindHospitalPage() {
       setSearchState("error");
       setErrorMsg(err instanceof Error ? err.message : "Network error — could not reach the server.");
     }
-  }, [latitude, longitude, facilityType]);
+  }, [latitude, longitude, facilityType, rankingStrategy]);
 
   // ── Render ──
 
@@ -129,7 +134,7 @@ export default function FindHospitalPage() {
             Find Nearby Hospitals
           </h1>
           <p className="text-gray-400 text-sm">
-            Powered by the GeoLocator agent — finds hospitals within 10 km of your location.
+            Powered by the GeoLocator agent — finds hospitals near your location with configurable ranking.
           </p>
         </header>
 
@@ -186,6 +191,51 @@ export default function FindHospitalPage() {
               </select>
             </label>
           </div>
+
+          {/* Priority / Ranking Strategy Selector */}
+          <fieldset className="space-y-2">
+            <legend className="text-sm text-gray-400">Priority</legend>
+            <div className="flex flex-wrap gap-4">
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="rankingStrategy"
+                  value="nearest"
+                  checked={rankingStrategy === "nearest"}
+                  onChange={() => setRankingStrategy("nearest")}
+                  className="accent-emerald-500"
+                />
+                Nearest to me
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="rankingStrategy"
+                  value="best"
+                  checked={rankingStrategy === "best"}
+                  onChange={() => setRankingStrategy("best")}
+                  className="accent-emerald-500"
+                />
+                Best rated
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="rankingStrategy"
+                  value="balanced"
+                  checked={rankingStrategy === "balanced"}
+                  onChange={() => setRankingStrategy("balanced")}
+                  className="accent-emerald-500"
+                />
+                Balanced
+              </label>
+            </div>
+            <p className="text-xs text-gray-500">
+              {rankingStrategy === "nearest" && "Searches within 10 km — prioritises closest facilities."}
+              {rankingStrategy === "best" && "Searches within 25 km — prioritises highest-rated facilities."}
+              {rankingStrategy === "balanced" && "Searches within 25 km — balances rating and distance."}
+            </p>
+          </fieldset>
 
           {geoError && (
             <p className="text-sm text-yellow-400">{geoError}</p>

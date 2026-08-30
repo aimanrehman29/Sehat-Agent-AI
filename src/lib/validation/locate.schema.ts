@@ -18,6 +18,8 @@ export const LocateRequestSchema = z.object({
   user_id: z.string().max(100).optional(),
   /** Session identifier for multi-turn conversations */
   session_id: z.string().max(100).optional(),
+  /** Ranking strategy preference (nearest, best, balanced) */
+  rankingStrategy: z.enum(["nearest", "best", "balanced"]).optional(),
 });
 
 export type LocateRequest = z.infer<typeof LocateRequestSchema>;
@@ -59,6 +61,8 @@ export const GeoLocatorResultSchema = z.object({
   }),
   /** Disclaimer about open_now reflecting general hours, not ER staffing */
   open_hours_disclaimer: z.string(),
+  /** Which ranking strategy was applied to sort the results */
+  ranking_strategy_used: z.enum(["nearest", "best", "balanced"]),
   /** Confidence score (0–1) */
   confidence: z.number().min(0).max(1),
 });

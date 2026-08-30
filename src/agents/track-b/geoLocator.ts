@@ -16,8 +16,11 @@ import type { GeoLocatorResult, Facility } from "@/types/orchestrator";
 
 const PLACES_API_URL = "https://places.googleapis.com/v1/places:searchNearby";
 
-/** Search radius in meters (10 km) */
-const SEARCH_RADIUS_METERS = 10_000;
+/** Search radius in meters for "nearest" strategy (10 km) */
+const RADIUS_NEAREST_METERS = 10_000;
+
+/** Search radius in meters for "best" and "balanced" strategies (25 km) */
+const RADIUS_EXTENDED_METERS = 25_000;
 
 /** Maximum results per request */
 const MAX_RESULT_COUNT = 10;
@@ -69,6 +72,66 @@ function haversineDistance(
   return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// ─── Ranking Strategy Type ──────────────────────────────────────────────────
+
+export type RankingStrategy = "nearest" | "best" | "balanced";
+
+// ─── Safety Grouping Helper ─────────────────────────────────────────────────
+
+/**
+ * Assign a priority tier to a facility based on its open/hours status.
+ * This 3-tier grouping is a SAFETY behavior and is preserved across all
+ * ranking strategies:
+ *   0 = confirmed open now (highest priority)
+ *   1 = hours unverified (unknown — could be open or closed)
+ *   2 = confirmed closed (lowest priority)
+ */
+function safetyGroup(f: Facility): number {
+  if (f.open_now === true) return 0;
+  if (f.hours_unverified === true) return 1;
+  return 2;
+}
+
+// ─── Strategy-Specific Sort Helpers ─────────────────────────────────────────
+
+/**
+ * Within-group comparator for the "nearest" strategy.
+ * Sorts by distance ascending (closest first).
+ */
+function sortNearest(a: Facility, b: Facility): number {
+  return a.distance_km - b.distance_km;
+}
+
+/**
+ * Within-group comparator for the "best" strategy.
+ * Sorts by rating descending; facilities with null rating sink to the bottom.
+ */
+function sortBest(a: Facility, b: Facility): number {
+  if (a.rating === null && b.rating === null) return 0;
+  if (a.rating === null) return 1;  // a sinks
+  if (b.rating === null) return -1; // b sinks
+  return b.rating - a.rating;       // highest rating first
+}
+
+/**
+ * Compute the combined score used by the "balanced" strategy.
+ * Formula: 0.6 * (rating / 5) + 0.4 * (1 - min(distance / radius, 1))
+ * Missing rating is treated as 0 for this formula only.
+ */
+function balancedScore(f: Facility, radiusKm: number): number {
+  const ratingNorm = f.rating !== null ? f.rating / 5 : 0;
+  const distNorm = 1 - Math.min(f.distance_km / radiusKm, 1);
+  return 0.6 * ratingNorm + 0.4 * distNorm;
+}
+
+/**
+ * Within-group comparator for the "balanced" strategy.
+ * Sorts by combined score descending (best score first).
+ */
+function sortBalanced(a: Facility, b: Facility, radiusKm: number): number {
+  return balancedScore(b, radiusKm) - balancedScore(a, radiusKm);
+}
+
 // ─── Main Search Function ───────────────────────────────────────────────────
 
 /**
@@ -80,14 +143,19 @@ function haversineDistance(
  *   filtering is not supported by the searchNearby endpoint. Results are
  *   always hospitals.
  * @param _requestId - Request identifier for tracing (unused currently)
- * @returns GeoLocator result with nearby facilities, open-first sorting, and nearest_open_facility
+ * @param rankingStrategy - How to rank and sort results:
+ *   "nearest" (default): 10 km radius, sort by distance
+ *   "best": 25 km radius, sort by rating descending
+ *   "balanced": 25 km radius, sort by combined distance+rating score
+ * @returns GeoLocator result with nearby facilities, safety-first sorting, and nearest_open_facility
  * @throws Error if GOOGLE_MAPS_API_KEY is missing or the API returns an error
  */
 export async function executeGeoLocate(
   latitude: number,
   longitude: number,
   facilityType: string | undefined,
-  _requestId: string
+  _requestId: string,
+  rankingStrategy: RankingStrategy = "nearest"
 ): Promise<GeoLocatorResult> {
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
 
@@ -98,6 +166,12 @@ export async function executeGeoLocate(
         "Google Cloud Console (enable the Places API (New) on the project)."
     );
   }
+
+  // ── Determine search radius based on ranking strategy ──
+  const radiusMeters = rankingStrategy === "nearest"
+    ? RADIUS_NEAREST_METERS
+    : RADIUS_EXTENDED_METERS;
+  const radiusKm = radiusMeters / 1000;
 
   // NOTE: The searchNearby endpoint does not support keyword-based specialty
   // filtering (the legacy API's `keyword` parameter has no equivalent here).
@@ -112,7 +186,7 @@ export async function executeGeoLocate(
     locationRestriction: {
       circle: {
         center: { latitude, longitude },
-        radius: SEARCH_RADIUS_METERS,
+        radius: radiusMeters,
       },
     },
   };
@@ -167,24 +241,46 @@ export async function executeGeoLocate(
     }
   );
 
-  // ── Sort: confirmed-open facilities first, then by distance within each group ──
+  // ── Sort: 3-tier safety grouping, then strategy-specific within each tier ──
+  // Tier 0: confirmed open now (highest)
+  // Tier 1: hours unverified (unknown)
+  // Tier 2: confirmed closed (lowest)
+  // This grouping is a safety behavior preserved across ALL strategies.
   facilities.sort((a, b) => {
-    const aOpen = a.open_now === true ? 0 : 1;
-    const bOpen = b.open_now === true ? 0 : 1;
-    if (aOpen !== bOpen) return aOpen - bOpen;
-    return a.distance_km - b.distance_km;
+    const groupA = safetyGroup(a);
+    const groupB = safetyGroup(b);
+    if (groupA !== groupB) return groupA - groupB;
+
+    // Within the same safety tier, apply strategy-specific sort
+    switch (rankingStrategy) {
+      case "best":
+        return sortBest(a, b);
+      case "balanced":
+        return sortBalanced(a, b, radiusKm);
+      case "nearest":
+      default:
+        return sortNearest(a, b);
+    }
   });
 
-  // ── Determine nearest confirmed-open facility ──
-  const nearestOpen = facilities.find((f) => f.open_now === true);
+  // ── Determine nearest confirmed-open facility (distance-based, strategy-independent) ──
+  // This is always the geographically closest confirmed-open facility regardless of
+  // how the list is sorted for display. Using a min-distance scan instead of
+  // facilities.find() ensures correctness across all ranking strategies.
+  const openFacilities = facilities.filter((f) => f.open_now === true);
+  const nearestOpen = openFacilities.reduce<Facility | null>(
+    (closest, f) => (closest === null || f.distance_km < closest.distance_km ? f : closest),
+    null
+  );
   const nearest_open_facility = nearestOpen?.name ?? null;
 
   return {
     facilities,
     nearest_open_facility,
-    search_radius_km: 10,
+    search_radius_km: radiusKm,
     location: { latitude, longitude },
     open_hours_disclaimer: OPEN_HOURS_DISCLAIMER,
+    ranking_strategy_used: rankingStrategy,
     // Placeholder confidence for the prototype — replace with a real
     // confidence score once the ranking/weighting logic is refined.
     confidence: 0.85,

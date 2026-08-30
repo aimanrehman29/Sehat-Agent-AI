@@ -268,6 +268,8 @@ export interface TriageResult {
   action: string;
   /** Symptom keywords detected */
   keywords_detected: string[];
+  /** Suggested GeoLocator ranking preference based on symptom text */
+  suggested_location_preference: "nearest" | "best" | "balanced";
   /** Confidence score (0–1) */
   confidence: number;
   /** Emergency escalation result — populated when urgency is HIGH */
@@ -281,12 +283,14 @@ export interface GeoLocatorResult {
   facilities: Facility[];
   /** Name of the closest facility confirmed open right now, or null if none */
   nearest_open_facility: string | null;
-  /** Search radius in kilometers */
+  /** Search radius in kilometers actually used (10 for nearest, 25 for best/balanced) */
   search_radius_km: number;
   /** Origin location used for the search */
   location: { latitude: number; longitude: number };
   /** Disclaimer about open_now reflecting general hours, not ER staffing */
   open_hours_disclaimer: string;
+  /** Which ranking strategy was applied to sort the results */
+  ranking_strategy_used: "nearest" | "best" | "balanced";
   /** Confidence score (0–1) */
   confidence: number;
 }

@@ -34,7 +34,8 @@ export async function POST(request: Request) {
       body.latitude,
       body.longitude,
       body.facility_type,
-      crypto.randomUUID()
+      crypto.randomUUID(),
+      body.rankingStrategy
     );
 
     const response = applyGuardrails({

@@ -133,6 +133,52 @@ const HIGH_URGENCY_SYMPTOMS = new Set([
   "shortness of breath",
 ]);
 
+// ─── Location Preference Detection ──────────────────────────────────────────
+
+/** Keywords suggesting the patient needs the nearest/urgent facility */
+const NEAREST_KEYWORDS = new Set([
+  "nearest", "closest", "qareeb", "nazdeek", "emergency",
+  "turant", "abhi", "urgent", "immediate", "jaldi",
+]);
+
+/** Keywords suggesting the patient wants the best-rated facility */
+const BEST_KEYWORDS = new Set([
+  "best", "achaa", "acha", "top", "reputed",
+  "trusted", "acha Doctor", "behtareen",
+]);
+
+/**
+ * Detect the patient's location-search preference from their symptom text.
+ *
+ * - Words like "nearest", "qareeb", "emergency" suggest urgency → "nearest"
+ * - Words like "best", "achaa", "top" suggest quality preference → "best"
+ * - Both present, or neither → "balanced"
+ *
+ * NOTE: The caller (route handler) MUST override this to "nearest" when the
+ * emergency check flags a genuine emergency — safety overrides stated preference.
+ *
+ * @param text - Patient's symptom/routing description
+ * @returns The detected ranking strategy preference
+ */
+export function detectLocationPreference(text: string): "nearest" | "best" | "balanced" {
+  const words = text.toLowerCase().split(/\s+/);
+  const wordSet = new Set(words);
+
+  const hasNearest = words.some((w) => NEAREST_KEYWORDS.has(w));
+  const hasBest = words.some((w) => BEST_KEYWORDS.has(w));
+
+  // Multi-word phrase detection for "sabse acha" (Urdu: "the best")
+  const hasMultiWordBest = text.toLowerCase().includes("sabse acha");
+
+  const wantsNearest = hasNearest;
+  const wantsBest = hasBest || hasMultiWordBest;
+
+  if (wantsNearest && !wantsBest) return "nearest";
+  if (wantsBest && !wantsNearest) return "best";
+  // Both present or neither present → balanced
+  return "balanced";
+}
+
 /**
  * Execute triage analysis on the given symptom text.
  *
@@ -143,11 +189,15 @@ const HIGH_URGENCY_SYMPTOMS = new Set([
  *
  * @param text - Patient's symptom description
  * @param _requestId - Request identifier for tracing (unused in mock)
- * @returns Mock triage result with department routing
+ * @param isEmergency - When true, forces suggested_location_preference to
+ *   "nearest" regardless of keyword detection (safety override, passed by
+ *   the route handler after emergency check)
+ * @returns Triage result with department routing and location preference
  */
 export async function executeTriage(
   text: string,
-  _requestId: string
+  _requestId: string,
+  isEmergency = false
 ): Promise<TriageResult> {
   const lower = text.toLowerCase();
   const words = new Set(lower.split(/\s+/));
@@ -169,6 +219,12 @@ export async function executeTriage(
 
   const urgency = isHighUrgency ? "HIGH" as const : "MODERATE" as const;
 
+  // ── Detect location preference from symptom text ──
+  // Safety override: if the emergency check flagged this as a genuine emergency,
+  // always force "nearest" regardless of what keyword detection says.
+  const detectedPreference = detectLocationPreference(text);
+  const suggested_location_preference = isEmergency ? "nearest" as const : detectedPreference;
+
   return {
     department: matchedDept,
     urgency,
@@ -177,6 +233,7 @@ export async function executeTriage(
       ? `Urgent referral to ${matchedDept} — seek immediate medical attention`
       : `Schedule appointment with ${matchedSpecialist ?? "General Practitioner"}`,
     keywords_detected: keywordsDetected,
+    suggested_location_preference,
     // Placeholder confidence for the prototype — replace with a real
     // confidence score once an actual NLP/classification model is integrated.
     confidence: keywordsDetected.length > 0 ? 0.82 : 0.65,

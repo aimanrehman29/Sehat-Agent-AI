@@ -44,6 +44,8 @@ export const TriageResultSchema = z.object({
   action: z.string().min(1),
   /** Symptom keywords detected */
   keywords_detected: z.array(z.string()),
+  /** Suggested GeoLocator ranking preference based on symptom text */
+  suggested_location_preference: z.enum(["nearest", "best", "balanced"]),
   /** Confidence score (0–1) */
   confidence: z.number().min(0).max(1),
   /** Emergency escalation result — populated when urgency is HIGH */
