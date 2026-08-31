@@ -112,7 +112,56 @@ export type AgentResultPayload =
   | TriageResult
   | GeoLocatorResult
   | EmergencyResult
-  | BookingResult;
+  | BookingResult
+  | VoiceTranscriptionResult
+  | ChatReplyResult;
+
+// ─── Voice Transcription Result ─────────────────────────────────────────────
+
+/** Result shape for the /api/track-a/voice/transcribe endpoint. */
+export interface VoiceTranscriptionResult {
+  /** Transcribed text (empty string if transcription was unavailable). */
+  transcript: string;
+  /** Source of the transcript. */
+  source: "pre_transcribed" | "whisper" | "none";
+  /** Language code detected by Whisper (e.g. "en", "ur"). */
+  detected_language?: string;
+}
+
+// ─── Follow-Up Chat Result ──────────────────────────────────────────────────
+
+/** Result shape for the /api/track-a/chat endpoint (contextual follow-up chat). */
+export interface ChatReplyResult {
+  /** The generated follow-up answer, grounded in the initial analysis context. */
+  reply: string;
+  /** Echoes back the session_id from the request. */
+  session_id: string;
+  /** Which Track A agent's context this conversation is anchored to. */
+  agent_target: "pharma-check" | "lingo-med" | "care-sync";
+  /** Total messages in the conversation including this reply. */
+  message_count: number;
+  /** Optional TTS text for auto-dictation of the reply. */
+  audio_response?: AudioResponse;
+}
+
+// ─── Voice TTS Metadata ──────────────────────────────────────────────────────
+
+/**
+ * Optional TTS metadata attached to every Track A agent result.
+ * When present, VoiceResponsePlayer reads the `text_to_speak` field aloud
+ * via the browser's speechSynthesis API (or an audio_url if pre-generated).
+ */
+export interface AudioResponse {
+  /** Concise plain-text summary to be spoken aloud. */
+  text_to_speak: string;
+  /**
+   * Pre-generated audio file URL (e.g. from a server-side TTS API).
+   * null = synthesize in the browser via window.speechSynthesis.
+   */
+  audio_url: string | null;
+  /** BCP 47 language tag for the synthesis voice. */
+  language: "en-US" | "ur-PK";
+}
 
 // ─── Pharma-Check Result ────────────────────────────────────────────────────
 
@@ -131,7 +180,31 @@ export interface PharmaCheckResult {
   risk: RiskAssessment;
   /** Human-readable warnings */
   warnings: string[];
+
+  // ── Updated Blueprint Fields (DRAP serialization mandate) ──
+  /** Name/description of the scanned item */
+  scanned_item: string;
+  /** DRAP number extracted from packaging */
+  drap_number: string;
+  /** Authenticity status per DRAP verification */
+  authenticity_status: AuthenticityStatus;
+  /** Human-readable reasoning for the authenticity determination */
+  reasoning: string;
+  /** Recommended action for the user */
+  recommended_action: string;
+  /** Mandatory disclaimer text */
+  disclaimer: string;
+  /** Optional TTS spoken summary — populated by the agent, consumed by VoiceResponsePlayer */
+  audio_response?: AudioResponse;
 }
+
+/**
+ * DRAP authenticity status categories.
+ */
+export type AuthenticityStatus =
+  | "VERIFIED"
+  | "COULD NOT BE VERIFIED"
+  | "WARNING";
 
 export interface DrugRegistryInfo {
   drug_name: string;
@@ -171,6 +244,8 @@ export interface LingoMedResult {
   summary: string;
   /** Simplified explanations for each flagged metric */
   explanations: MetricExplanation[];
+  /** Optional TTS spoken summary */
+  audio_response?: AudioResponse;
 }
 
 export interface PatientInfo {
@@ -218,6 +293,8 @@ export interface CareSyncResult {
   reminders: ReminderSchedule[];
   /** Raw OCR text (for debugging / verification) */
   raw_extracted_text: string;
+  /** Optional TTS spoken summary */
+  audio_response?: AudioResponse;
 }
 
 export interface ParsedMedicine {

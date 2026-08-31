@@ -6,6 +6,11 @@
 "use client";
 
 import { useState, useRef } from "react";
+import VoiceInputMic from "@/components/voice/VoiceInputMic";
+import VoiceResponsePlayer from "@/components/voice/VoiceResponsePlayer";
+import AgentFollowUpChat from "@/components/chat/AgentFollowUpChat";
+import type { VoiceRecording } from "@/lib/voice/recorder";
+import type { AudioResponse } from "@/lib/voice/tts";
 
 export default function CareSyncTestPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -14,6 +19,14 @@ export default function CareSyncTestPage() {
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState<number>(0);
+  const [reminderLoading, setReminderLoading] = useState(false);
+  const [reminderResult, setReminderResult] = useState<Record<string, unknown> | null>(null);
+  const [voicePayload, setVoicePayload] = useState<{
+    audio_base64: string;
+    audio_mime_type: string;
+    transcript_text: string;
+  } | null>(null);
+  const [audioResponse, setAudioResponse] = useState<AudioResponse | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   function handleFile(f: File) {
@@ -21,6 +34,7 @@ export default function CareSyncTestPage() {
     setPreview(URL.createObjectURL(f));
     setResult(null);
     setError(null);
+    setReminderResult(null);
   }
 
   async function analyze() {
@@ -35,12 +49,21 @@ export default function CareSyncTestPage() {
       const res = await fetch("/api/track-a/care-sync/parse", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ media_base64: base64, media_type: file.type }),
+        body: JSON.stringify({
+          media_base64: base64,
+          media_type: file.type,
+          ...(voicePayload && { voice_payload: voicePayload }),
+        }),
       });
       const data = await res.json();
       setElapsed(Math.round(performance.now() - t0));
       if (!res.ok) setError(data.error?.message || `HTTP ${res.status}`);
-      else setResult(data);
+      else {
+        setResult(data);
+        setAudioResponse(
+          (data?.result as Record<string, unknown>)?.audio_response as AudioResponse ?? null
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Request failed");
       setElapsed(Math.round(performance.now() - t0));
@@ -53,8 +76,51 @@ export default function CareSyncTestPage() {
   const medicines = (r?.medicines || []) as Record<string, unknown>[];
   const reminders = (r?.reminders || []) as Record<string, unknown>[];
   const doctor = r?.doctor_info as Record<string, unknown> | undefined;
+  const prescriptionId = (r?.prescription_id as string) || null;
 
   const S = (v: unknown): string => (v == null ? "" : String(v));
+
+  async function activateReminders() {
+    if (!reminders.length || !prescriptionId) return;
+    setReminderLoading(true);
+    setReminderResult(null);
+
+    try {
+      const medicinesPayload = reminders
+        .filter((rem) => ((rem.cron_expressions as string[]) || []).length > 0)
+        .map((rem) => ({
+          medicine_name: rem.medicine_name as string,
+          cron_expressions: rem.cron_expressions as string[],
+          timezone: "Asia/Karachi",
+          channel: "push" as const,
+        }));
+
+      if (medicinesPayload.length === 0) {
+        setReminderResult({ success: false, message: "No medicines with scheduled reminders found." });
+        return;
+      }
+
+      const res = await fetch("/api/track-a/care-sync/reminders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: "test-user",
+          prescription_id: prescriptionId,
+          medicines: medicinesPayload,
+        }),
+      });
+
+      const data = await res.json();
+      setReminderResult(data as Record<string, unknown>);
+    } catch (e) {
+      setReminderResult({
+        success: false,
+        message: e instanceof Error ? e.message : "Failed to activate reminders",
+      });
+    } finally {
+      setReminderLoading(false);
+    }
+  }
 
   const formIcons: Record<string, string> = {
     tablet: "💊",
@@ -108,6 +174,22 @@ export default function CareSyncTestPage() {
             )}
           </div>
           {file && <p className="text-xs text-gray-400 mt-2 text-center">{file.name}</p>}
+
+          {/* Voice Input */}
+          <div className="mt-4">
+            <VoiceInputMic
+              accentClass="bg-purple-600 hover:bg-purple-700"
+              disabled={loading}
+              onRecordingReady={(r: VoiceRecording) =>
+                setVoicePayload({
+                  audio_base64: r.audioBase64,
+                  audio_mime_type: r.audioMimeType,
+                  transcript_text: r.transcriptText,
+                })
+              }
+              onClear={() => setVoicePayload(null)}
+            />
+          </div>
 
           <button
             onClick={analyze}
@@ -203,6 +285,54 @@ export default function CareSyncTestPage() {
         </div>
       )}
 
+      {/* Set Medicine Reminders Button */}
+      {reminders.length > 0 && prescriptionId && (
+        <div className="bg-gradient-to-r from-purple-50 to-blue-50 rounded-xl border border-purple-200 p-6 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-sm font-semibold text-purple-800 uppercase tracking-wider">
+                Medication Reminders
+              </h3>
+              <p className="text-xs text-purple-600 mt-1">
+                Activate push notifications for {reminders.filter((rm) => ((rm.cron_expressions as string[]) || []).length > 0).length} medicine{reminders.filter((rm) => ((rm.cron_expressions as string[]) || []).length > 0).length !== 1 ? "s" : ""}.
+              </p>
+            </div>
+            <button
+              onClick={activateReminders}
+              disabled={reminderLoading}
+              className="px-5 py-2.5 rounded-lg font-medium text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed bg-purple-600 text-white hover:bg-purple-700 shadow-sm"
+            >
+              {reminderLoading ? (
+                <span className="flex items-center gap-2">
+                  <span className="animate-spin">⏳</span> Activating...
+                </span>
+              ) : (
+                "Set Medicine Reminders"
+              )}
+            </button>
+          </div>
+          {reminderResult && (
+            <div
+              className={`mt-3 rounded-lg p-3 text-sm ${
+                (reminderResult.success as boolean)
+                  ? "bg-green-50 border border-green-200 text-green-800"
+                  : "bg-red-50 border border-red-200 text-red-700"
+              }`}
+            >
+              <p className="font-medium">
+                {(reminderResult.success as boolean) ? "✅" : "⚠️"}{" "}
+                {S(reminderResult.message)}
+              </p>
+              {(reminderResult.activated_count as number) > 0 && (
+                <p className="text-xs mt-1 opacity-80">
+                  {reminderResult.activated_count as number} reminder{(reminderResult.activated_count as number) > 1 ? "s" : ""} created.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Reminder Schedules */}
       {reminders.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
@@ -240,6 +370,22 @@ export default function CareSyncTestPage() {
           <pre className="mt-3 text-xs text-gray-700 whitespace-pre-wrap font-mono bg-white p-4 rounded-lg border">{S(r.raw_extracted_text)}</pre>
         </details>
       )}
+
+      {/* Voice Response Player */}
+      {audioResponse && (
+        <VoiceResponsePlayer
+          audioResponse={audioResponse}
+          autoPlay={false}
+          accentClass="bg-purple-600 hover:bg-purple-700"
+        />
+      )}
+
+      {/* Contextual Follow-Up Chat */}
+      <AgentFollowUpChat
+        initialContext={result}
+        agentTarget="care-sync"
+        accentClass="bg-purple-600 hover:bg-purple-700"
+      />
 
       {/* Disclaimer */}
       {result && (

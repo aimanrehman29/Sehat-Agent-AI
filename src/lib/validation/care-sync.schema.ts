@@ -4,6 +4,7 @@
  */
 
 import { z } from "zod";
+import { VoicePayloadSchema } from "./pharma-check.schema";
 
 // ─── Request Schema ─────────────────────────────────────────────────────────
 
@@ -22,6 +23,8 @@ export const CareSyncParseRequestSchema = z.object({
   query: z.string().max(500).optional(),
   /** User identifier */
   user_id: z.string().max(100).optional(),
+  /** Optional voice input — audio or pre-transcribed text */
+  voice_payload: VoicePayloadSchema.optional(),
 }).refine(
   (data) => data.media_base64 || data.media_url,
   { message: "Either media_base64 or media_url must be provided" }
@@ -88,6 +91,37 @@ export const CreateReminderRequestSchema = z.object({
 
 export type CreateReminderRequest = z.infer<typeof CreateReminderRequestSchema>;
 
+/**
+ * Schema for activating a batch of medication reminders from a parsed prescription.
+ * Used by the "Set Medicine Reminders" button in the Care-Sync UI.
+ */
+export const ActivateRemindersRequestSchema = z.object({
+  user_id: z.string().min(1),
+  prescription_id: z.string().min(1),
+  medicines: z.array(
+    z.object({
+      medicine_name: z.string().min(1),
+      cron_expressions: z.array(z.string().min(1)).min(1),
+      timezone: z.string().default("Asia/Karachi"),
+      channel: z.enum(["push", "sms", "voice"]).default("push"),
+    })
+  ).min(1),
+});
+
+export type ActivateRemindersRequest = z.infer<typeof ActivateRemindersRequestSchema>;
+
+/**
+ * Schema for the reminder activation response.
+ */
+export const ActivateRemindersResponseSchema = z.object({
+  success: z.boolean(),
+  activated_count: z.number(),
+  reminder_ids: z.array(z.string()),
+  message: z.string(),
+});
+
+export type ActivateRemindersResponse = z.infer<typeof ActivateRemindersResponseSchema>;
+
 // ─── Validation Helpers ─────────────────────────────────────────────────────
 
 export function validateCareSyncParseRequest(data: unknown) {
@@ -100,4 +134,8 @@ export function validateCareSyncResult(data: unknown) {
 
 export function validateCreateReminderRequest(data: unknown) {
   return CreateReminderRequestSchema.parse(data);
+}
+
+export function validateActivateRemindersRequest(data: unknown) {
+  return ActivateRemindersRequestSchema.parse(data);
 }

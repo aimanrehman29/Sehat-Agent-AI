@@ -13,6 +13,8 @@ export const AGENTS = {
   GEO_LOCATOR: "geo-locator",
   EMERGENCY: "emergency",
   AUTO_BOOKING: "auto-booking",
+  VOICE_TRANSCRIBE: "voice-transcribe",
+  CHAT: "agent-chat",
 } as const;
 
 export type AgentId = (typeof AGENTS)[keyof typeof AGENTS];

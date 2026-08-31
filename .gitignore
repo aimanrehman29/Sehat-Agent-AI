@@ -43,3 +43,6 @@ coverage/
 
 # Uploads
 public/uploads/
+
+# OCR language data (too large for GitHub)
+*.traineddata
