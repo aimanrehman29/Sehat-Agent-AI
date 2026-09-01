@@ -20,6 +20,8 @@ export const LocateRequestSchema = z.object({
   session_id: z.string().max(100).optional(),
   /** Ranking strategy preference (nearest, best, balanced) */
   rankingStrategy: z.enum(["nearest", "best", "balanced"]).optional(),
+  /** Optional department/specialty to bias results (e.g. "Cardiology") */
+  department: z.string().max(200).optional(),
 });
 
 export type LocateRequest = z.infer<typeof LocateRequestSchema>;
@@ -45,6 +47,12 @@ export const FacilitySchema = z.object({
   hours_unverified: z.boolean().optional(),
   /** Advisory note when opening hours could not be confirmed */
   hours_note: z.string().optional(),
+  /** Estimated driving time in minutes, null if unavailable */
+  travel_time_minutes: z.number().nullable().optional(),
+  /** Human-readable driving time (e.g. "12 mins"), null if unavailable */
+  travel_time_text: z.string().nullable().optional(),
+  /** Google Maps navigation URL for driving directions */
+  navigation_link: z.string().optional(),
 });
 
 export const GeoLocatorResultSchema = z.object({

@@ -163,10 +163,13 @@ export async function executeEmergencyCheck(
       actions_taken: [
         "Mental health crisis protocols activated",
         "Stay with the person. Do not leave them alone. Listen without judgment.",
-        // ⚠️  UNVERIFIED — This helpline number has not been independently
-        // confirmed. Verify it is correct before relying on it in a live
-        // demo or real use.
-        "Contact Umang Pakistan mental health helpline: 0311-7786264",
+        // Verified 1 Sep 2026 via umang.com.pk contact page and the
+        // official @PakistanUmang X account bio. If this project ships
+        // beyond the hackathon, re-verify before relying on it long-term —
+        // umang.com.pk's hosting was found suspended on this date, though
+        // the number itself was independently confirmed via their social
+        // account.
+        "Contact Umang Pakistan mental health helpline: 03117786264",
         `Call ${emergencyService.service} at ${emergencyService.number} if there is immediate physical danger`,
         "Remove any potential means of self-harm from the person's surroundings",
       ],

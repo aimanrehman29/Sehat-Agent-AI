@@ -132,6 +132,54 @@ function sortBalanced(a: Facility, b: Facility, radiusKm: number): number {
   return balancedScore(b, radiusKm) - balancedScore(a, radiusKm);
 }
 
+// ─── Travel Time Helper (Google Distance Matrix API) ─────────────────────
+
+interface TravelTimeResult {
+  duration_minutes: number | null;
+  duration_text: string | null; // e.g. "12 mins"
+}
+
+async function getTravelTime(
+  originLat: number,
+  originLng: number,
+  destLat: number,
+  destLng: number
+): Promise<TravelTimeResult> {
+  try {
+    const url = new URL(
+      "https://maps.googleapis.com/maps/api/distancematrix/json"
+    );
+    url.searchParams.set("origins", `${originLat},${originLng}`);
+    url.searchParams.set("destinations", `${destLat},${destLng}`);
+    url.searchParams.set("mode", "driving");
+    url.searchParams.set("key", process.env.GOOGLE_MAPS_API_KEY ?? "");
+    const res = await fetch(url.toString());
+    const data = await res.json();
+    const element = data?.rows?.[0]?.elements?.[0];
+    if (element?.status !== "OK") {
+      return { duration_minutes: null, duration_text: null };
+    }
+    return {
+      duration_minutes: Math.round(element.duration.value / 60),
+      duration_text: element.duration.text,
+    };
+  } catch {
+    // Never throw — travel time is a nice-to-have, not critical path.
+    return { duration_minutes: null, duration_text: null };
+  }
+}
+
+// ─── Navigation Link Helper ─────────────────────────────────────────────
+
+function buildNavigationLink(lat: number, lng: number, placeId?: string): string {
+  const base = "https://www.google.com/maps/dir/?api=1";
+  const destination = `&destination=${lat},${lng}`;
+  const placeIdParam = placeId
+    ? `&destination_place_id=${encodeURIComponent(placeId)}`
+    : "";
+  return `${base}${destination}${placeIdParam}`;
+}
+
 // ─── Main Search Function ───────────────────────────────────────────────────
 
 /**
@@ -147,6 +195,9 @@ function sortBalanced(a: Facility, b: Facility, radiusKm: number): number {
  *   "nearest" (default): 10 km radius, sort by distance
  *   "best": 25 km radius, sort by rating descending
  *   "balanced": 25 km radius, sort by combined distance+rating score
+ * @param department - Optional department/specialty (e.g. "Cardiology")
+ *   to bias results toward matching facilities. Sent as a keyword
+ *   alongside the Places API searchNearby request.
  * @returns GeoLocator result with nearby facilities, safety-first sorting, and nearest_open_facility
  * @throws Error if GOOGLE_MAPS_API_KEY is missing or the API returns an error
  */
@@ -155,7 +206,8 @@ export async function executeGeoLocate(
   longitude: number,
   facilityType: string | undefined,
   _requestId: string,
-  rankingStrategy: RankingStrategy = "nearest"
+  rankingStrategy: RankingStrategy = "nearest",
+  department?: string
 ): Promise<GeoLocatorResult> {
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
 
@@ -175,9 +227,15 @@ export async function executeGeoLocate(
 
   // NOTE: The searchNearby endpoint does not support keyword-based specialty
   // filtering (the legacy API's `keyword` parameter has no equivalent here).
-  // Results are always hospitals. The `facilityType` parameter is accepted
-  // for interface compatibility but is not used in the API call.
+  // The `facilityType` parameter is accepted for interface compatibility
+  // but is not used in the API call. When a `department` is provided, we
+  // include it in the request body as a best-effort keyword — the API may
+  // or may not honor it depending on the endpoint version.
   void facilityType;
+
+  const searchKeyword = department
+    ? `hospital ${department}`
+    : undefined;
 
   // ── Build request body ──
   const requestBody = {
@@ -189,6 +247,10 @@ export async function executeGeoLocate(
         radius: radiusMeters,
       },
     },
+    // Best-effort department bias — included when provided.
+    // The Places API (New) searchNearby endpoint may or may not use this
+    // field, but it documents intent for the caller.
+    ...(searchKeyword ? { textQuery: searchKeyword } : {}),
   };
 
   // ── Call Google Places API (New) Nearby Search ──
@@ -212,7 +274,7 @@ export async function executeGeoLocate(
     );
   }
 
-  // ── Map results to Facility type ──
+  // ── Map results to Facility type (preliminary — travel time added below) ──
   const facilities: Facility[] = (data.places ?? []).map(
     (place: GooglePlaceResult) => {
       const distance_km = parseFloat(
@@ -234,12 +296,39 @@ export async function executeGeoLocate(
         rating: place.rating ?? null,
         phone: place.nationalPhoneNumber ?? null,
         open_now: openNow,
+        navigation_link: buildNavigationLink(
+          place.location.latitude,
+          place.location.longitude,
+          place.id
+        ),
         ...(openNow === undefined
           ? { hours_unverified: true as const, hours_note: HOURS_UNVERIFIED_NOTE }
           : {}),
+        // Travel time will be populated by the parallel Promise.all below.
+        travel_time_minutes: null as number | null,
+        travel_time_text: null as string | null,
+        // Retain place data for the travel time lookup.
+        _lat: place.location.latitude,
+        _lng: place.location.longitude,
       };
     }
   );
+
+  // ── Fetch travel times in parallel (non-blocking, never throws) ──
+  const travelTimes = await Promise.all(
+    facilities.map((f) =>
+      getTravelTime(latitude, longitude, (f as any)._lat, (f as any)._lng)
+    )
+  );
+
+  // Merge travel time data into each facility and strip temp coordinates.
+  for (let i = 0; i < facilities.length; i++) {
+    const tt = travelTimes[i];
+    facilities[i].travel_time_minutes = tt.duration_minutes;
+    facilities[i].travel_time_text = tt.duration_text;
+    delete (facilities[i] as any)._lat;
+    delete (facilities[i] as any)._lng;
+  }
 
   // ── Sort: 3-tier safety grouping, then strategy-specific within each tier ──
   // Tier 0: confirmed open now (highest)

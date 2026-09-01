@@ -11,6 +11,7 @@ import type {
   SourceChannel,
   MediaType,
 } from "@/config/constants";
+import type { DoctorLookupResult } from "@/agents/track-b/doctorLookup";
 
 // ─── Universal Request Envelope ─────────────────────────────────────────────
 
@@ -114,7 +115,8 @@ export type AgentResultPayload =
   | EmergencyResult
   | BookingResult
   | VoiceTranscriptionResult
-  | ChatReplyResult;
+  | ChatReplyResult
+  | DoctorLookupResult;
 
 // ─── Voice Transcription Result ─────────────────────────────────────────────
 
@@ -384,6 +386,12 @@ export interface Facility {
   hours_unverified?: boolean;
   /** Advisory note when opening hours could not be confirmed */
   hours_note?: string;
+  /** Estimated driving time in minutes (from Distance Matrix API), null if unavailable */
+  travel_time_minutes?: number | null;
+  /** Human-readable driving time (e.g. "12 mins"), null if unavailable */
+  travel_time_text?: string | null;
+  /** Google Maps navigation URL for driving directions to this facility */
+  navigation_link?: string;
 }
 
 // ─── Emergency Result (Track B) ─────────────────────────────────────────────
