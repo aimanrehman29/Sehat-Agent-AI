@@ -14,7 +14,8 @@ import type { GeoLocatorResult, Facility } from "@/types/orchestrator";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const PLACES_API_URL = "https://places.googleapis.com/v1/places:searchNearby";
+const PLACES_NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby";
+const PLACES_TEXT_URL = "https://places.googleapis.com/v1/places:searchText";
 
 /** Search radius in meters for "nearest" strategy (10 km) */
 const RADIUS_NEAREST_METERS = 10_000;
@@ -132,11 +133,24 @@ function sortBalanced(a: Facility, b: Facility, radiusKm: number): number {
   return balancedScore(b, radiusKm) - balancedScore(a, radiusKm);
 }
 
-// ─── Travel Time Helper (Google Distance Matrix API) ─────────────────────
+// ─── Travel Time Helper (Google Routes API) ───────────────────────────────
 
 interface TravelTimeResult {
   duration_minutes: number | null;
   duration_text: string | null; // e.g. "12 mins"
+}
+
+/**
+ * Format seconds into a human-readable duration string.
+ * e.g. 734 → "12 mins", 3661 → "1 hr 1 min"
+ */
+function formatDuration(seconds: number): string {
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min${minutes !== 1 ? "s" : ""}`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMins = minutes % 60;
+  if (remainingMins === 0) return `${hours} hr${hours !== 1 ? "s" : ""}`;
+  return `${hours} hr${hours !== 1 ? "s" : ""} ${remainingMins} min${remainingMins !== 1 ? "s" : ""}`;
 }
 
 async function getTravelTime(
@@ -146,25 +160,51 @@ async function getTravelTime(
   destLng: number
 ): Promise<TravelTimeResult> {
   try {
-    const url = new URL(
-      "https://maps.googleapis.com/maps/api/distancematrix/json"
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) return { duration_minutes: null, duration_text: null };
+
+    const res = await fetch(
+      "https://routes.googleapis.com/directions/v2:computeRoutes",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": apiKey,
+          "X-Goog-FieldMask": "routes.duration,routes.distanceMeters",
+        },
+        body: JSON.stringify({
+          origin: { location: { latLng: { latitude: originLat, longitude: originLng } } },
+          destination: { location: { latLng: { latitude: destLat, longitude: destLng } } },
+          travelMode: "DRIVE",
+        }),
+      }
     );
-    url.searchParams.set("origins", `${originLat},${originLng}`);
-    url.searchParams.set("destinations", `${destLat},${destLng}`);
-    url.searchParams.set("mode", "driving");
-    url.searchParams.set("key", process.env.GOOGLE_MAPS_API_KEY ?? "");
-    const res = await fetch(url.toString());
+
     const data = await res.json();
-    const element = data?.rows?.[0]?.elements?.[0];
-    if (element?.status !== "OK") {
+    const route = data?.routes?.[0];
+
+    if (!route?.duration) {
+      // ── TEMPORARY DIAGNOSTIC — remove after confirming fix works ──
+      console.error(
+        "[getTravelTime] Routes API no route/duration:",
+        JSON.stringify({ status: data?.status, error: data?.error, routes: data?.routes }, null, 2)
+      );
       return { duration_minutes: null, duration_text: null };
     }
+
+    // duration is a string like "734s" — parse the number
+    const seconds = parseInt(route.duration.replace("s", ""), 10);
+    if (isNaN(seconds)) {
+      return { duration_minutes: null, duration_text: null };
+    }
+
     return {
-      duration_minutes: Math.round(element.duration.value / 60),
-      duration_text: element.duration.text,
+      duration_minutes: Math.round(seconds / 60),
+      duration_text: formatDuration(seconds),
     };
-  } catch {
-    // Never throw — travel time is a nice-to-have, not critical path.
+  } catch (err) {
+    // ── TEMPORARY DIAGNOSTIC — remove after confirming fix works ──
+    console.error("[getTravelTime] Exception:", err);
     return { duration_minutes: null, duration_text: null };
   }
 }
@@ -225,36 +265,42 @@ export async function executeGeoLocate(
     : RADIUS_EXTENDED_METERS;
   const radiusKm = radiusMeters / 1000;
 
-  // NOTE: The searchNearby endpoint does not support keyword-based specialty
-  // filtering (the legacy API's `keyword` parameter has no equivalent here).
-  // The `facilityType` parameter is accepted for interface compatibility
-  // but is not used in the API call. When a `department` is provided, we
-  // include it in the request body as a best-effort keyword — the API may
-  // or may not honor it depending on the endpoint version.
+  // ── Choose endpoint based on whether department filtering is requested ──
+  // searchNearby does NOT support textQuery — when a department is provided,
+  // we switch to the searchText endpoint which does.
+  const useTextSearch = !!department;
+
+  const apiUrl = useTextSearch ? PLACES_TEXT_URL : PLACES_NEARBY_URL;
+
+  const requestBody = useTextSearch
+    ? {
+        // ── searchText request body ──
+        textQuery: `${department} hospital`,
+        includedType: "hospital",
+        maxResultCount: MAX_RESULT_COUNT,
+        locationBias: {
+          circle: {
+            center: { latitude, longitude },
+            radius: radiusMeters,
+          },
+        },
+      }
+    : {
+        // ── searchNearby request body (no keyword filtering) ──
+        includedTypes: ["hospital"],
+        maxResultCount: MAX_RESULT_COUNT,
+        locationRestriction: {
+          circle: {
+            center: { latitude, longitude },
+            radius: radiusMeters,
+          },
+        },
+      };
+
   void facilityType;
 
-  const searchKeyword = department
-    ? `hospital ${department}`
-    : undefined;
-
-  // ── Build request body ──
-  const requestBody = {
-    includedTypes: ["hospital"],
-    maxResultCount: MAX_RESULT_COUNT,
-    locationRestriction: {
-      circle: {
-        center: { latitude, longitude },
-        radius: radiusMeters,
-      },
-    },
-    // Best-effort department bias — included when provided.
-    // The Places API (New) searchNearby endpoint may or may not use this
-    // field, but it documents intent for the caller.
-    ...(searchKeyword ? { textQuery: searchKeyword } : {}),
-  };
-
-  // ── Call Google Places API (New) Nearby Search ──
-  const apiResponse = await fetch(PLACES_API_URL, {
+  // ── Call Google Places API (searchText or searchNearby) ──
+  const apiResponse = await fetch(apiUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
