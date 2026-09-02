@@ -51,7 +51,7 @@ export default function VoiceInputMic({
   onRecordingReady,
   onClear,
   lang = "en-US",
-  accentClass = "bg-indigo-600 hover:bg-indigo-700",
+  accentClass = "bg-brand-kelly hover:bg-brand-forest",
   disabled = false,
 }: VoiceInputMicProps) {
   const {
@@ -86,12 +86,12 @@ export default function VoiceInputMic({
   // ── Render ──────────────────────────────────────────────────────────────
 
   return (
-    <div className="rounded-xl border border-dashed border-indigo-300 bg-indigo-50/40 p-4">
+    <div className="rounded-xl border border-dashed border-brand-g32 bg-brand-g4 p-4">
       {/* Header label */}
       <div className="flex items-center gap-2 mb-3">
         <span className="text-lg">🎙️</span>
-        <p className="text-sm font-semibold text-indigo-800">Voice Input</p>
-        <span className="text-xs text-indigo-400 ml-auto">English · اردو</span>
+        <p className="text-sm font-semibold text-brand-forest">Voice Input</p>
+        <span className="text-xs text-brand-g56 ml-auto">English · اردو</span>
       </div>
 
       {/* Control row */}

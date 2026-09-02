@@ -22,6 +22,7 @@ import {
   appendHistory,
 } from "@/lib/orchestrator/sessionStore";
 import { classifyIntent } from "@/lib/orchestrator/intentClassifier";
+import type { Intent } from "@/lib/orchestrator/intentClassifier";
 import {
   detectEmergency,
   executeEmergencyCheck,
@@ -41,7 +42,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { session_id, text, latitude, longitude, province } = body;
+    const { session_id, text, latitude, longitude, province, agent_hint } = body;
 
     // ── Validation ──
     if (!session_id || !text) {
@@ -83,7 +84,26 @@ export async function POST(req: NextRequest) {
     }
 
     // ── PRIORITY 2: Classify intent and route ──
-    const intent = classifyIntent(text);
+    let intent: Intent = classifyIntent(text);
+
+    // agent_hint: when the user tapped a specific agent tile on the hub,
+    // the chat shell pins the intent so free-text classification can't
+    // misroute the conversation. "orchestrator" (free-text entry) keeps
+    // the classified intent. Emergency detection above always wins.
+    if (agent_hint && agent_hint !== "orchestrator") {
+      const HINTED_INTENTS: Record<string, Intent> = {
+        triage: "symptom_triage",
+        "geo-locator": "hospital_search",
+        "auto-booking": "doctor_lookup",
+        // Track A direct agents normally hit their own endpoints, but map
+        // their hints too in case a client routes them through here.
+        "pharma-check": "drug_verification",
+        "lingo-med": "lab_report",
+        "care-sync": "prescription",
+      };
+      const hinted = HINTED_INTENTS[agent_hint as string];
+      if (hinted) intent = hinted;
+    }
 
     switch (intent) {
       case "symptom_triage":

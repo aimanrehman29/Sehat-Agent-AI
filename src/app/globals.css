@@ -4,16 +4,29 @@
 
 :root {
   --foreground-rgb: 15, 23, 42;
-  --background-start-rgb: 248, 250, 252;
-  --background-end-rgb: 239, 246, 255;
+
+  /* ── Brand palette (single source of truth: tailwind.config.ts) ── */
+  --brand-forest: #015D67; /* Primary headings / dark accents */
+  --brand-kelly: #00ACB1; /* Primary actions / buttons / user bubbles */
+  --brand-mint: #87E4DB; /* System loading / active states */
+  --brand-pistachio: #CAF0C1; /* Light icon backgrounds / badges */
+
+  /* ── Neutrals & tints ── */
+  --brand-g88: #1f6c75;
+  --brand-g72: #47878e;
+  --brand-g56: #70a2a7;
+  --brand-g40: #99bdc1;
+  --brand-g32: #adc9cd;
+  --brand-g24: #c2d7da;
+  --brand-g16: #d5e4e6;
+  --brand-g10: #e5ee2f;
+  --brand-g8: #ebf2f3;
+  --brand-g6: #f0f5f6;
+  --brand-g4: #f5f9f9;
+  --brand-g2: #fafcfc;
 }
 
 body {
   color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
+  background: var(--brand-g2);
 }

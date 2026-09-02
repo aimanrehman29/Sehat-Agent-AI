@@ -66,7 +66,8 @@ export default function ConsentModal({
           <button
             type="button"
             onClick={onAccept}
-            className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
+            className="flex-1 px-4 py-2.5 rounded-lg text-sm font-medium text-white transition-colors"
+            style={{ backgroundColor: "#00ACB1" }}
           >
             Allow
           </button>
