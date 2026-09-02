@@ -12,6 +12,7 @@ import type {
   MediaType,
 } from "@/config/constants";
 import type { DoctorLookupResult } from "@/agents/track-b/doctorLookup";
+import type { FallbackResult } from "@/lib/orchestrator/fallbackAssistant";
 
 // ─── Universal Request Envelope ─────────────────────────────────────────────
 
@@ -116,7 +117,8 @@ export type AgentResultPayload =
   | BookingResult
   | VoiceTranscriptionResult
   | ChatReplyResult
-  | DoctorLookupResult;
+  | DoctorLookupResult
+  | FallbackResult;
 
 // ─── Voice Transcription Result ─────────────────────────────────────────────
 

@@ -15,6 +15,8 @@ export const AGENTS = {
   AUTO_BOOKING: "auto-booking",
   VOICE_TRANSCRIBE: "voice-transcribe",
   CHAT: "agent-chat",
+  ORCHESTRATOR: "orchestrator",
+  EMERGENCY_ESCALATION: "emergency-escalation",
 } as const;
 
 export type AgentId = (typeof AGENTS)[keyof typeof AGENTS];
