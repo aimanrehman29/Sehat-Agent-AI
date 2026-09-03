@@ -60,6 +60,19 @@ export default function ResultRenderer({ response }: { response: any }) {
       break;
 
     case "geo-locator":
+      // Doctor lookup results also ride the "geo-locator" agent_source but
+      // carry summary_text (web search snippets) instead of a facilities list —
+      // render those as a plain text card instead of an empty hospital list.
+      if (result?.summary_text && !result?.facilities) {
+        content = (
+          <FallbackCard
+            result={{
+              summary_text: result.summary_text,
+            }}
+          />
+        );
+        break;
+      }
       // GeoLocator results chained from Triage include triage_context —
       // TriageCard is shown above the hospital list when present.
       content = (

@@ -1,3 +1,4 @@
+import { GoogleGenAI } from "@google/genai";
 import { logger } from "@/lib/logger";
 
 export interface DoctorLookupParams {
@@ -32,6 +33,171 @@ interface SerperResponse {
     snippet?: string;
     link?: string;
   }>;
+}
+
+// ─── Gemini cleanup (lazy singleton) ────────────────────────────────────────
+
+/** Gemini model used to clean and structure raw search snippets. */
+const GEMINI_CLEANUP_MODEL = "gemini-3.6-flash";
+
+let _gemini: GoogleGenAI | null = null;
+
+function getGeminiClient(): GoogleGenAI | null {
+  if (_gemini) return _gemini;
+  const apiKey = process.env.GEMINI_2_KEY;
+  if (!apiKey) return null;
+  _gemini = new GoogleGenAI({ apiKey });
+  return _gemini;
+}
+
+/**
+ * Prompt for cleaning raw Serper snippets into a readable doctor listing.
+ * Strictly grounded — Gemini may only reformat what the snippets contain,
+ * never invent doctors, timings, or phone numbers. Duplicates are merged,
+ * search-engine boilerplate is discarded, and the output is a plain
+ * bulleted list limited to the five canonical fields.
+ */
+const CLEANUP_PROMPT =
+  "You are a strict data-extraction and formatting assistant for a Pakistani " +
+  "healthcare app. Below are raw Google search snippets about doctors, " +
+  "hospitals, or specialists. Extract ONLY real, usable facts and consolidate " +
+  "them into one clean list.\n\n" +
+  "DEDUPLICATE:\n" +
+  "- If the same doctor or hospital appears in multiple snippets (even with " +
+  "slightly different spellings), merge everything into ONE entry. Never " +
+  "output the same doctor or hospital more than once.\n\n" +
+  "DISCARD all of the following:\n" +
+  "- Search engine UI text and links: 'Read more', 'Learn more', 'Visit', " +
+  "'View profile', 'Sign up', 'Download', pagination labels, bare URLs.\n" +
+  "- Website names, navigation menus, breadcrumbs, repeated page headings, " +
+  "SEO filler, and ads.\n" +
+  "- Unrelated user queries such as 'Who is the best cardiologist in " +
+  "Karachi?' — a question is never a fact; do not include it.\n" +
+  "- Chopped fragments, ellipses ('...'), and incomplete sentences with no " +
+  "usable detail.\n\n" +
+  "OUTPUT FORMAT — a plain bulleted list, one bullet per doctor or hospital, " +
+  "exactly in this shape:\n" +
+  "- Dr. Name — Specialty | Hospital/Clinic, City | Days & Timings | Phone\n\n" +
+  "STRICT RULES:\n" +
+  "1. Each bullet may contain ONLY these fields, in this order: Doctor " +
+  "Name, Specialty, Hospital/Clinic Location, Timings/Days, Contact Number.\n" +
+  "2. If any field is missing or uncertain, OMIT it silently — no 'N/A', no " +
+  "placeholder, no ellipsis, no broken text.\n" +
+  "3. Do NOT invent or guess any name, specialty, timing, phone number, or " +
+  "address that is not in the snippets.\n" +
+  "4. Output the list only — no preamble, no summary sentence, no closing " +
+  "remark. Start directly with the first bullet.\n" +
+  "5. If nothing real can be extracted from the snippets, reply with exactly " +
+  "this sentence and nothing else: No reliable doctor information found.\n\n" +
+  "Raw snippets:\n\n";
+
+/**
+ * Pass raw Serper snippets to Gemini for cleanup and structuring.
+ * Returns null when Gemini is unavailable or fails — the caller then falls
+ * back to the local deterministic formatter, NEVER to the raw snippets.
+ */
+async function cleanSnippetsWithGemini(rawSnippets: string): Promise<string | null> {
+  const client = getGeminiClient();
+  if (!client) {
+    logger.warn("[DoctorLookup] GEMINI_2_KEY not set — using local snippet formatting");
+    return null;
+  }
+
+  try {
+    const completion = await client.models.generateContent({
+      model: GEMINI_CLEANUP_MODEL,
+      contents: [{ role: "user", parts: [{ text: CLEANUP_PROMPT + rawSnippets }] }],
+      config: {
+        temperature: 0.1,
+        maxOutputTokens: 600,
+      },
+    });
+
+    const text = completion.text ?? "";
+    return text.trim().length > 0 ? text.trim() : null;
+  } catch (error) {
+    console.error('[DoctorLookup] Cleaning failed:', error);
+    logger.warn("[DoctorLookup] Gemini cleanup failed — using local snippet formatting", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+// ─── Local fallback formatting (no LLM) ─────────────────────────────────────
+
+/**
+ * Search-engine UI fragments that must never reach the chat UI — stripped
+ * wherever they appear inside titles and snippets.
+ */
+const BOILERPLATE_PHRASES_RE =
+  /\b(?:read more|learn more|see more|show more|view profile|visit (?:website|page|us)|sign in|sign ?up|log ?in|register|download(?: the)? app|book (?:an )?appointment (?:online|now)|call now|get directions|contact us)\b/gi;
+
+/** Related-question headings, e.g. "Who is the best cardiologist in Karachi?" */
+const QUERY_SHAPE_RE = /[?؟]\s*$/;
+
+/** Strip boilerplate phrases, ellipses, and orphaned separators from a title/snippet. */
+function sanitizeSnippetText(text: string): string {
+  return text
+    .replace(BOILERPLATE_PHRASES_RE, " ")
+    .replace(/\.{2,}/g, "")
+    .replace(/…/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/^[\s\-–—|·:,]+/, "")
+    .replace(/[\s\-–—|·:,]+$/, "")
+    .trim();
+}
+
+/** Standard "nothing usable came back from the search" result. */
+function noResults(): DoctorLookupResult {
+  return {
+    found: false,
+    summary_text:
+      "No results found for this search. Try a different department or area.",
+    disclaimer: SEARCH_DISCLAIMER,
+    source: "serper_web_search",
+  };
+}
+
+/**
+ * Deterministic fallback used when Gemini is unavailable, fails, or returns
+ * nothing: formats the organic results into clean bullets locally so raw
+ * search-engine boilerplate never reaches the user.
+ */
+function formatOrganicLocally(
+  organic: NonNullable<SerperResponse["organic"]>
+): string {
+  const seen = new Set<string>();
+  const bullets: string[] = [];
+
+  for (const r of organic) {
+    const title = sanitizeSnippetText(r.title ?? "");
+    const snippet = sanitizeSnippetText(r.snippet ?? "");
+    if (!title && !snippet) continue;
+
+    // Skip query-shaped headings ("Who is the best cardiologist in Karachi?")
+    // and bare URLs — neither carries doctor/hospital facts.
+    if (QUERY_SHAPE_RE.test(title)) continue;
+    if (title && !/\s/.test(title) && /\.(com|pk|net|org|io)(\/|$)/i.test(title)) {
+      continue;
+    }
+
+    // Deduplicate the same page heading appearing across snippets.
+    const key = (title || snippet)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+
+    if (title && snippet && title !== snippet) {
+      bullets.push(`- ${title} — ${snippet}`);
+    } else {
+      bullets.push(`- ${title || snippet}`);
+    }
+  }
+
+  return bullets.join("\n");
 }
 
 export async function lookupDoctors(
@@ -79,27 +245,43 @@ export async function lookupDoctors(
     const organic = data.organic;
 
     if (!organic || organic.length === 0) {
-      return {
-        found: false,
-        summary_text: "No results found for this search. Try a different department or area.",
-        disclaimer: SEARCH_DISCLAIMER,
-        source: "serper_web_search",
-      };
+      return noResults();
     }
 
-    // Combine top organic results into a readable summary.
+    // Combine top organic results into the raw snippet payload for Gemini.
     const MAX_RESULTS = 5;
-    const lines = organic.slice(0, MAX_RESULTS).map((r) => {
-      const title = r.title ?? "";
-      const snippet = r.snippet ?? "";
-      return title ? `${title}\n${snippet}` : snippet;
-    });
+    const top = organic.slice(0, MAX_RESULTS);
+    const rawSnippets = top
+      .map((r) => {
+        const title = r.title ?? "";
+        const snippet = r.snippet ?? "";
+        return title ? `${title}\n${snippet}` : snippet;
+      })
+      .filter(Boolean)
+      .join("\n\n");
 
-    const summary_text = lines.filter(Boolean).join("\n\n");
+    if (!rawSnippets) return noResults();
+
+    // ── Clean and structure via Gemini; local formatter as safe fallback ──
+    const cleaned = await cleanSnippetsWithGemini(rawSnippets);
+
+    // Gemini reports the snippets held only boilerplate — treat as no results.
+    if (
+      cleaned &&
+      cleaned.toLowerCase().startsWith("no reliable doctor information")
+    ) {
+      return noResults();
+    }
+
+    // NEVER surface raw snippets: when Gemini is unavailable or fails, format
+    // the organic results locally instead (boilerplate stripped, deduped).
+    const summary_text = cleaned ?? formatOrganicLocally(top);
+
+    if (!summary_text) return noResults();
 
     return {
-      found: summary_text.length > 0,
-      summary_text: summary_text || "No results found for this search. Try a different department or area.",
+      found: true,
+      summary_text,
       disclaimer: SEARCH_DISCLAIMER,
       source: "serper_web_search",
     };

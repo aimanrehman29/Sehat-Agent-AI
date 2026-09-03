@@ -44,6 +44,16 @@ interface Turn {
   response?: any;
 }
 
+// ─── Disclaimer rendering ──────────────────────────────────────────────────
+
+/**
+ * The canonical guardrails disclaimer text already opens with a ⚕️ glyph —
+ * strip it when rendering behind our own indicator so it isn't shown twice.
+ */
+function formatDisclaimerText(text: string): string {
+  return text.replace(/^\u2695\uFE0F?\s*/, "");
+}
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
@@ -282,6 +292,22 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
               </span>
               <div className="max-w-[85%]">
                 <ResultRenderer response={turn.response} />
+                {/* Mandatory guardrails disclaimer — sits under every bot bubble */}
+                {turn.response?.guardrails?.disclaimer_text && (
+                  <p
+                    dir="ltr"
+                    className="mt-1.5 flex items-start gap-1.5 text-[11px] leading-snug text-brand-g56"
+                  >
+                    <span aria-hidden="true" className="flex-shrink-0">
+                      ⚕️
+                    </span>
+                    <span>
+                      {formatDisclaimerText(
+                        turn.response.guardrails.disclaimer_text
+                      )}
+                    </span>
+                  </p>
+                )}
               </div>
             </div>
           )
