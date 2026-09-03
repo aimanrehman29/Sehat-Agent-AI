@@ -56,6 +56,11 @@ interface PharmaResultLike {
   scanned_item?: string;
   recommended_action?: string;
   risk?: { level?: string };
+  brand_name?: string;
+  generic_name?: string;
+  strength?: string;
+  safety_warnings_en?: string[];
+  safety_warnings_ur?: string[];
 }
 
 /**
@@ -93,6 +98,8 @@ interface LingoMetric {
 
 interface LingoResultLike {
   summary?: string;
+  summary_en?: string;
+  summary_ur?: string;
   flagged_metrics?: LingoMetric[];
   patient_info?: { name?: string } | null;
 }
@@ -111,9 +118,12 @@ export function buildLingoAudioResponse(result: LingoResultLike): AudioResponse 
     : "";
 
   // Use agent summary if available; otherwise build from flagged metrics
+  // Prefer bilingual summary_en if available, fall back to legacy summary
+  const baseSummary = result.summary_en ?? result.summary;
+
   let text: string;
-  if (result.summary) {
-    text = `Lab report analysis complete${patientClause}. ${result.summary}`;
+  if (baseSummary) {
+    text = `Lab report analysis complete${patientClause}. ${baseSummary}`;
   } else if (result.flagged_metrics && result.flagged_metrics.length > 0) {
     const names = result.flagged_metrics
       .slice(0, 3) // cap at 3 to keep speech short
@@ -149,6 +159,8 @@ interface CareResultLike {
   medicines?: CareMedicine[];
   doctor_info?: { name?: string } | null;
   prescription_id?: string | null;
+  summary_en?: string;
+  summary_ur?: string;
 }
 
 /**
@@ -189,12 +201,15 @@ export function buildCareAudioResponse(result: CareResultLike): AudioResponse {
     ? " Your reminders are ready to be activated."
     : "";
 
-  const text = `Prescription parsed successfully.${doctorClause}${medClause}${reminderClause}`;
+  // Prefer bilingual summary if available
+  const baseText = result.summary_en
+    ? `Prescription parsed successfully. ${result.summary_en}`
+    : `Prescription parsed successfully.${doctorClause}${medClause}${reminderClause}`;
 
   return {
-    text_to_speak: text.trim(),
+    text_to_speak: baseText.trim(),
     audio_url: null,
-    language: "en-US",
+    language: result.summary_ur ? "ur-PK" : "en-US",
   };
 }
 

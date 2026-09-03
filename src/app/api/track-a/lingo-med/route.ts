@@ -40,6 +40,28 @@ export async function POST(request: Request) {
     const requestId = crypto.randomUUID();
     const result = await agent.execute(body, requestId);
 
+    // ── Detect non-medical image rejection ──
+    if (
+      result.summary_en?.includes("does not appear to be a medical") ||
+      result.report_type === "N/A"
+    ) {
+      return NextResponse.json(
+        applyErrorGuardrail({
+          request_id: requestId,
+          agent_source: "lingo-med",
+          error_code: "NON_MEDICAL_IMAGE",
+          error_message: result.summary_en ?? "Not a medical lab report.",
+          error_details: {
+            error_message_ur:
+              result.summary_ur ??
+              "اپ لوڈ کی گئی تصویر طبی رپورٹ، نسخہ یا دوا کا پیکٹ نہیں لگتی۔",
+          },
+          processing_time_ms: Date.now() - startTime,
+        }),
+        { status: 400 },
+      );
+    }
+
     const response = applyGuardrails({
       request_id: requestId,
       agent_source: "lingo-med",

@@ -1,18 +1,22 @@
 /**
  * ─────────────────────────────────────────────────────────────────────────────
- * lingoMed.ts — Lab report simplification logic.
+ * lingoMed.ts — Lab report simplification with Vision AI (English + Urdu).
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * Lingo-Med AI takes complex medical lab reports (images or PDFs) and
- * produces plain-language explanations that patients can understand.
+ * produces plain-language explanations in BOTH English and Urdu that
+ * patients can understand.
  *
  * Pipeline:
- *   1. OCR the lab report image/PDF (supports Urdu + English)
- *   2. Parse structured fields: test name, value, unit, reference range
- *   3. Classify each metric: NORMAL | BORDERLINE | ABNORMAL | CRITICAL
- *   4. Generate plain-English explanation for each flagged metric
- *   5. Produce overall summary paragraph
- *   6. Persist parsed data in LabReport + LabMetric Prisma models
+ *   1. Validate image presence
+ *   2. Merge any voice transcript for extra context
+ *   3. Send image to Vision AI model (Gemini / OpenAI) for:
+ *      a. Image classification (medical vs non-medical)
+ *      b. Structured extraction of test names, values, reference ranges
+ *      c. Severity flagging (NORMAL | BORDERLINE | ABNORMAL | CRITICAL)
+ *      d. Bilingual summaries (English + Urdu)
+ *   4. If Vision unavailable → Tesseract OCR fallback pipeline
+ *   5. Persist to LabReport + LabMetric Prisma models
  *
  * Guardrail:
  *   Every response MUST include the "Assist, not Diagnose" disclaimer.
@@ -27,125 +31,289 @@ import {
   type VoicePayload,
 } from "@/lib/voice/transcriber";
 import { buildLingoAudioResponse, type AudioResponse } from "@/lib/voice/tts";
+import {
+  analyzeImageWithVision,
+  parseVisionJson,
+} from "@/lib/agents/visionClient";
 
 // ─── Agent Class ────────────────────────────────────────────────────────
 
 export class LingoMedAgent {
   readonly name = "lingo-med";
 
-  /**
-   * Execute the lab report simplification pipeline.
-   */
   async execute(
     payload: Record<string, unknown>,
-    requestId: string
+    requestId: string,
   ): Promise<LingoMedResult> {
-    logger.info(`[LingoMed] Starting report analysis`, { requestId });
+    logger.info("[LingoMed] Starting report analysis", { requestId });
 
-    const imageBuffer = resolveImageBuffer(payload);
+    const imageBase64 = payload.media_base64 as string | undefined;
+    const mimeType = (payload.media_type as string) ?? "image/jpeg";
     const userId = (payload.user_id as string) ?? "anonymous";
 
-    // ── Step 1: OCR the lab report ──
-    let rawText = "";
-    if (imageBuffer) {
-      try {
-        const textResult = await extractText(imageBuffer, {
-          language: "eng+urd",
-        });
-        rawText = textResult.raw_text;
-        logger.debug(
-          `[LingoMed] OCR extracted ${rawText.length} chars`,
-          { requestId }
+    // ── Step 1: Merge voice transcript ──
+    let voiceContext = "";
+    const voicePayload = payload.voice_payload as VoicePayload | undefined;
+    if (voicePayload) {
+      const transcription = await transcribeVoicePayload(voicePayload, requestId);
+      if (transcription.transcript) {
+        voiceContext = transcription.transcript;
+        logger.info(
+          `[LingoMed] Voice transcript merged (${transcription.source})`,
+          { requestId },
         );
+      }
+    }
+
+    // ── Step 2: Vision AI — primary analysis path ──
+    if (imageBase64) {
+      const visionResult = await this.analyzeWithVision(
+        imageBase64,
+        mimeType,
+        voiceContext,
+        requestId,
+      );
+
+      // Non-medical image rejection
+      if (visionResult && 'rejected' in visionResult) {
+        return {
+          patient_info: null,
+          report_type: "N/A",
+          key_findings: [],
+          summary_en: visionResult.error_message_en,
+          summary_ur: visionResult.error_message_ur,
+          audio_text: visionResult.error_message_en,
+          metrics: [],
+          flagged_metrics: [],
+          summary: visionResult.error_message_en,
+          confidence: 0.95,
+          audio_response: buildLingoAudioResponse({
+            summary: visionResult.error_message_en,
+            summary_en: visionResult.error_message_en,
+            summary_ur: visionResult.error_message_ur,
+            flagged_metrics: [],
+            patient_info: null,
+          }),
+        };
+      }
+
+      if (visionResult && !('rejected' in visionResult)) {
+        // Persist and return — Vision path succeeded
+        await this.persistLabReport(
+          userId,
+          visionResult.report_type,
+          visionResult.summary_en,
+          visionResult.summary_ur,
+          visionResult.audio_text,
+          voiceContext,
+          visionResult.key_findings,
+          visionResult.metrics,
+          visionResult.patient_info,
+          requestId,
+        );
+
+        logger.info(
+          `[LingoMed] Vision analysis complete — ${visionResult.flagged_metrics.length} flagged`,
+          { requestId },
+        );
+
+        return {
+          patient_info: visionResult.patient_info,
+          report_type: visionResult.report_type,
+          key_findings: visionResult.key_findings,
+          summary_en: visionResult.summary_en,
+          summary_ur: visionResult.summary_ur,
+          audio_text: visionResult.audio_text,
+          has_high_risk_flag: visionResult.has_high_risk_flag,
+          metrics: visionResult.metrics,
+          flagged_metrics: visionResult.flagged_metrics,
+          // Legacy field for backward compat
+          summary: visionResult.summary_en,
+          confidence: 0.92,
+          audio_response: buildLingoAudioResponse({
+            summary: visionResult.summary_en,
+            summary_en: visionResult.summary_en,
+            summary_ur: visionResult.summary_ur,
+            flagged_metrics: visionResult.flagged_metrics,
+            patient_info: visionResult.patient_info,
+          }),
+        };
+      }
+    }
+
+    // ── Step 3: Fallback path — Tesseract OCR + regex heuristics ──
+    logger.info("[LingoMed] Using OCR fallback path", { requestId });
+    return this.analyzeWithOCR(imageBase64, voiceContext, userId, requestId);
+  }
+
+  // ── Vision AI Analysis ──────────────────────────────────────────────
+
+  private async analyzeWithVision(
+    imageBase64: string,
+    mimeType: string,
+    voiceContext: string,
+    requestId: string,
+  ): Promise<VisionAnalysisOutput | NonMedicalRejection | null> {
+    const userPrompt = voiceContext
+      ? `Analyze this medical lab report image. Additional voice context from the patient: "${voiceContext}"`
+      : "Analyze this medical lab report image. Extract all test results, classify severity, and provide bilingual summaries.";
+
+    const visionResponse = await analyzeImageWithVision({
+      imageBase64,
+      mimeType,
+      systemPrompt: LINGO_MED_SYSTEM_PROMPT,
+      userPrompt,
+      requestId,
+      jsonResponse: true,
+    });
+
+    if (!visionResponse) {
+      logger.warn("[LingoMed] Vision analysis unavailable", { requestId });
+      return null;
+    }
+
+    const parsed = parseVisionJson<VisionLLMResponse>(visionResponse.text);
+    if (!parsed) {
+      logger.warn("[LingoMed] Vision response JSON parse failed", { requestId });
+      return null;
+    }
+
+    // Non-medical image → reject immediately
+    if (parsed.is_valid_medical_doc === false || parsed.is_medical === false) {
+      logger.info("[LingoMed] Image classified as non-medical — rejected", {
+        requestId,
+      });
+      return {
+        rejected: true,
+        error_message_en:
+          "The uploaded image does not appear to be a medical report, prescription, or medicine package.",
+        error_message_ur:
+          "اپ لوڈ کی گئی تصویر طبی رپورٹ، نسخہ یا دوا کا پیکٹ نہیں لگتی۔",
+      };
+    }
+
+    // Build metrics from LLM-extracted tests
+    const metrics: LabMetric[] = (parsed.tests ?? []).map((t) => ({
+      test_name: t.test_name,
+      value: t.value,
+      unit: t.unit,
+      reference_low: t.reference_low ?? null,
+      reference_high: t.reference_high ?? null,
+      severity: (t.severity as MetricSeverity) ?? "NORMAL",
+    }));
+
+    const flagged = metrics.filter((m) => m.severity !== "NORMAL");
+    const patientInfo = parsed.patient_info ?? null;
+
+    return {
+      patient_info: patientInfo,
+      report_type: parsed.report_type ?? "Lab Report",
+      key_findings: parsed.key_findings ?? [],
+      summary_en: parsed.summary_en ?? "Lab report analyzed.",
+      summary_ur: parsed.summary_ur ?? "لیب رپورٹ کا تجزیہ کیا گیا۔",
+      audio_text: parsed.audio_text ?? parsed.summary_en ?? "Lab report analyzed.",
+      has_high_risk_flag: parsed.has_high_risk_flag ?? false,
+      metrics,
+      flagged_metrics: flagged,
+    };
+  }
+
+  // ── OCR Fallback Pipeline ─────────────────────────────────────────
+
+  private async analyzeWithOCR(
+    imageBase64: string | undefined,
+    voiceContext: string,
+    userId: string,
+    requestId: string,
+  ): Promise<LingoMedResult> {
+    let rawText = "";
+
+    if (imageBase64) {
+      try {
+        const buffer = Buffer.from(imageBase64, "base64");
+        const textResult = await extractText(buffer, { language: "eng+urd" });
+        rawText = textResult.raw_text;
+        logger.debug(`[LingoMed] OCR extracted ${rawText.length} chars`, {
+          requestId,
+        });
       } catch (error) {
-        logger.warn("[LingoMed] OCR failed, using fallback data", {
+        logger.warn("[LingoMed] OCR extraction failed", {
           requestId,
           error: error instanceof Error ? error.message : String(error),
         });
       }
     }
 
-    // ── Step 1b: Resolve voice transcript and append to OCR context ──
-    const voicePayload = payload.voice_payload as VoicePayload | undefined;
-    if (voicePayload) {
-      const transcription = await transcribeVoicePayload(voicePayload, requestId);
-      if (transcription.transcript) {
-        rawText = rawText
-          ? `${rawText}\n\n[Voice context]: ${transcription.transcript}`
-          : transcription.transcript;
-        logger.info(
-          `[LingoMed] Voice transcript merged (${transcription.source}): ${transcription.transcript.length} chars`,
-          { requestId }
-        );
-      }
+    if (voiceContext) {
+      rawText = rawText
+        ? `${rawText}\n\n[Voice context]: ${voiceContext}`
+        : voiceContext;
     }
 
-    // ── Step 2: Parse metrics from OCR text ──
-    const metrics = await this.parseMetrics(rawText);
-    logger.info(`[LingoMed] Parsed ${metrics.length} metrics`, { requestId });
-
-    // ── Step 3: Classify each metric ──
+    // Parse, classify, explain
+    const metrics = this.parseMetricsFromText(rawText);
     const classified = metrics.map((m) => this.classifyMetric(m));
     const flagged = classified.filter((m) => m.severity !== "NORMAL");
-
-    // ── Step 4: Generate explanations for flagged metrics ──
-    const explanations = await Promise.all(
-      flagged.map((m) => this.generateExplanation(m))
-    );
-
-    // ── Step 5: Generate overall summary ──
-    const summary = await this.generateSummary(classified, flagged);
-
-    // ── Step 6: Extract patient info ──
+    const explanations = flagged.map((m) => this.generateExplanation(m));
+    const summaryEn = this.generateSummary(classified, flagged);
+    const summaryUr = "لیب رپورٹ کا تجزیہ مکمل۔ براہ کرم اپنے ڈاکٹر سے مشورہ کریں۔";
     const patientInfo = this.extractPatientInfo(rawText);
 
-    // ── Step 7: Persist to database ──
     await this.persistLabReport(
       userId,
+      "Lab Report",
+      summaryEn,
+      summaryUr,
+      summaryEn,
       rawText,
-      patientInfo,
+      flagged.map((m) => ({
+        test_name: m.test_name,
+        severity: m.severity,
+        explanation: explanations.find((e) => e.test_name === m.test_name)
+          ?.explanation ?? "",
+      })),
       classified,
-      explanations,
-      summary,
-      requestId
+      patientInfo,
+      requestId,
     );
 
     logger.info(
-      `[LingoMed] Complete — ${flagged.length}/${classified.length} flagged`,
-      { requestId }
+      `[LingoMed] OCR fallback complete — ${flagged.length}/${classified.length} flagged`,
+      { requestId },
     );
 
     return {
       patient_info: patientInfo,
+      report_type: "Lab Report",
+      key_findings: flagged.map((m) => ({
+        test_name: m.test_name,
+        severity: m.severity,
+        explanation: explanations.find((e) => e.test_name === m.test_name)
+          ?.explanation ?? "",
+      })),
+      summary_en: summaryEn,
+      summary_ur: summaryUr,
+      audio_text: summaryEn,
+      has_high_risk_flag: classified.some((m) => m.severity === "CRITICAL"),
       metrics: classified,
       flagged_metrics: flagged,
-      summary,
-      explanations,
-      confidence: 0.88,
-      // ── TTS spoken summary ──
+      summary: summaryEn,
+      confidence: 0.85,
       audio_response: buildLingoAudioResponse({
-        summary,
+        summary: summaryEn,
+        summary_en: summaryEn,
+        summary_ur: summaryUr,
         flagged_metrics: flagged,
         patient_info: patientInfo,
       }),
     };
   }
 
-  // ── Metric Parsing ──
+  // ── OCR Metric Parsing (no hardcoded fallback) ────────────────────
 
-  private async parseMetrics(rawText: string): Promise<RawMetric[]> {
-    if (!rawText || rawText.trim().length === 0) {
-      // Return fallback data when OCR produces no text
-      return [
-        { test_name: "Hemoglobin", value: 14.2, unit: "g/dL", reference_low: 13.0, reference_high: 17.0 },
-        { test_name: "Fasting Blood Glucose", value: 138, unit: "mg/dL", reference_low: 70, reference_high: 100 },
-        { test_name: "Total Cholesterol", value: 215, unit: "mg/dL", reference_low: null, reference_high: 200 },
-        { test_name: "TSH", value: 5.8, unit: "mIU/L", reference_low: 0.4, reference_high: 4.0 },
-      ];
-    }
+  private parseMetricsFromText(rawText: string): RawMetric[] {
+    if (!rawText || rawText.trim().length === 0) return [];
 
-    // Parse lab report lines using regex heuristics
-    // Pattern: "Test Name ... Value Unit ... (Ref Low – Ref High)"
     const metrics: RawMetric[] = [];
     const lines = rawText.split("\n").map((l) => l.trim()).filter(Boolean);
 
@@ -154,21 +322,10 @@ export class LingoMedAgent {
       if (parsed) metrics.push(parsed);
     }
 
-    // If parsing yielded nothing, return fallback
-    if (metrics.length === 0) {
-      return [
-        { test_name: "Hemoglobin", value: 14.2, unit: "g/dL", reference_low: 13.0, reference_high: 17.0 },
-        { test_name: "Fasting Blood Glucose", value: 138, unit: "mg/dL", reference_low: 70, reference_high: 100 },
-      ];
-    }
-
-    return metrics;
+    return metrics; // May be empty — that's correct behavior
   }
 
   private parseLabLine(line: string): RawMetric | null {
-    // Common lab line patterns:
-    // "Hemoglobin  14.2 g/dL  (13.0 - 17.0)"
-    // "Fasting Blood Glucose: 138 mg/dL  [70-100]"
     const pattern =
       /^([A-Za-z][A-Za-z\s()]+?)\s*[:\-]?\s*(\d+\.?\d*)\s*([A-Za-z/%]+)\s*(?:\(|\[)?\s*(\d+\.?\d*)?\s*[-–]\s*(\d+\.?\d*)?\s*(?:\)|\])?/;
     const match = line.match(pattern);
@@ -187,7 +344,7 @@ export class LingoMedAgent {
     };
   }
 
-  // ── Classification ──
+  // ── Classification ────────────────────────────────────────────────
 
   private classifyMetric(m: RawMetric): LabMetric {
     let severity: MetricSeverity = "NORMAL";
@@ -204,28 +361,32 @@ export class LingoMedAgent {
     return { ...m, severity };
   }
 
-  // ── Explanation Generation ──
+  // ── Explanation & Summary (OCR fallback) ──────────────────────────
 
-  private async generateExplanation(
-    metric: LabMetric
-  ): Promise<MetricExplanation> {
-    // Template-based explanations (production: replace with LLM)
+  private generateExplanation(metric: LabMetric): MetricExplanation {
+    let suggestion = "Please consult your doctor for this finding.";
+    if (metric.severity === "CRITICAL") {
+      suggestion =
+        "This value is significantly outside the normal range. Please contact your doctor immediately.";
+    } else if (metric.severity === "ABNORMAL") {
+      suggestion =
+        "This value is outside the normal range. Please consult your doctor.";
+    }
+
     return {
       test_name: metric.test_name,
       explanation:
         `Your ${metric.test_name} is ${metric.value} ${metric.unit}. ` +
         `The normal range is ${metric.reference_low ?? "—"} – ${metric.reference_high ?? "—"} ${metric.unit}.`,
       severity: metric.severity,
-      suggestion: "Please consult your doctor for this finding.",
+      suggestion,
     };
   }
 
-  // ── Summary Generation ──
-
-  private async generateSummary(
-    all: LabMetric[],
-    flagged: LabMetric[]
-  ): Promise<string> {
+  private generateSummary(all: LabMetric[], flagged: LabMetric[]): string {
+    if (all.length === 0) {
+      return "Could not extract test results from the image. Please upload a clearer image of your lab report.";
+    }
     if (flagged.length === 0) {
       return "All your lab results are within normal ranges. Great job maintaining your health!";
     }
@@ -236,34 +397,19 @@ export class LingoMedAgent {
     );
   }
 
-  // ── Patient Info Extraction ──
+  // ── Patient Info Extraction ───────────────────────────────────────
 
-  /**
-   * Parse patient demographic information from the top section of a lab report.
-   *
-   * Handles the most common Pakistani/South-Asian lab report header formats:
-   *
-   *   Patient Name:  Muhammad Ali          Name: Ali Hassan
-   *   Age / Sex:     35 years / M          Age: 35  Sex: Male
-   *   Lab:           Agha Khan Laboratory  Date: 12/08/2026
-   *   Date:          15-08-2026
-   *
-   * Returns null if no recognizable patient data is found (e.g. blank image).
-   */
   private extractPatientInfo(rawText: string): PatientInfo | null {
     if (!rawText || rawText.trim().length === 0) return null;
 
-    // Work on the first 40 lines where the header lives
     const headerLines = rawText
       .split("\n")
       .slice(0, 40)
       .map((l) => l.trim())
       .filter(Boolean);
-
     const headerBlock = headerLines.join("\n");
 
-    // ── Name ──────────────────────────────────────────────────────────
-    // Matches: "Patient Name: Muhammad Ali", "Name: Ali", "Patient: Ahmed Khan"
+    // Name
     const namePatterns = [
       /patient\s+name\s*[:\-]\s*([A-Za-z][A-Za-z\s.]{1,50})/i,
       /name\s*[:\-]\s*([A-Za-z][A-Za-z\s.]{1,50})/i,
@@ -273,14 +419,12 @@ export class LingoMedAgent {
     for (const re of namePatterns) {
       const m = headerBlock.match(re);
       if (m && m[1].trim().length > 1) {
-        // Drop trailing noise words (age, sex, date artefacts)
         name = m[1].trim().replace(/\s+(age|sex|dob|date|mr|ms|mrs).*$/i, "");
         break;
       }
     }
 
-    // ── Age ───────────────────────────────────────────────────────────
-    // Matches: "Age: 35", "Age/Sex: 35Y/M", "35 years", "35 Yrs"
+    // Age
     const agePatterns = [
       /age\s*[:/\-]\s*(\d{1,3})\s*(?:years?|yrs?|y\b)?/i,
       /\b(\d{1,3})\s*(?:years?|yrs?)\b/i,
@@ -290,15 +434,11 @@ export class LingoMedAgent {
       const m = headerBlock.match(re);
       if (m) {
         const parsed = parseInt(m[1], 10);
-        if (parsed > 0 && parsed < 130) {
-          age = parsed;
-          break;
-        }
+        if (parsed > 0 && parsed < 130) { age = parsed; break; }
       }
     }
 
-    // ── Gender ────────────────────────────────────────────────────────
-    // Matches: "Sex: Male", "Gender: F", "M / 35", "age/sex: 35/M"
+    // Gender
     const genderPattern =
       /(?:sex|gender)\s*[:\-/]\s*(male|female|m\b|f\b)|(?:age\/sex\s*:\s*\d+\s*\/\s*(male|female|m\b|f\b))/i;
     let gender: string | undefined;
@@ -310,8 +450,7 @@ export class LingoMedAgent {
       else gender = raw.charAt(0).toUpperCase() + raw.slice(1);
     }
 
-    // ── Report date ───────────────────────────────────────────────────
-    // Matches: "Date: 15/08/2026", "Date: 15-Aug-2026", "2026-08-15"
+    // Report date
     const datePatterns = [
       /(?:report\s+)?date\s*[:\-]\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
       /(?:report\s+)?date\s*[:\-]\s*(\d{1,2}[\/\-][A-Za-z]{3}[\/\-]\d{2,4})/i,
@@ -320,23 +459,16 @@ export class LingoMedAgent {
     let report_date: string | undefined;
     for (const re of datePatterns) {
       const m = headerBlock.match(re);
-      if (m) {
-        report_date = m[1].trim();
-        break;
-      }
+      if (m) { report_date = m[1].trim(); break; }
     }
 
-    // ── Lab name ──────────────────────────────────────────────────────
-    // Matches: "Lab: Aga Khan", "Laboratory: City Lab", "Lab Name: ..."
+    // Lab name
     const labPattern =
       /(?:lab(?:oratory)?(?:\s+name)?)\s*[:\-]\s*([A-Za-z0-9][A-Za-z0-9\s,.-]{2,60})/i;
     let lab_name: string | undefined;
     const lm = headerBlock.match(labPattern);
-    if (lm) {
-      lab_name = lm[1].trim().replace(/\s{2,}/g, " ");
-    }
+    if (lm) lab_name = lm[1].trim().replace(/\s{2,}/g, " ");
 
-    // Return null only when we found nothing at all
     if (!name && age === undefined && !gender && !report_date && !lab_name) {
       return null;
     }
@@ -350,31 +482,29 @@ export class LingoMedAgent {
     };
   }
 
-  // ── Database Persistence ──
+  // ── Database Persistence ──────────────────────────────────────────
 
   private async persistLabReport(
     userId: string,
+    reportType: string,
+    summaryEn: string,
+    summaryUr: string,
+    audioText: string,
     rawText: string,
-    patientInfo: PatientInfo | null,
+    keyFindings: KeyFinding[],
     metrics: LabMetric[],
-    explanations: MetricExplanation[],
-    summary: string,
-    requestId: string
+    patientInfo: PatientInfo | null,
+    requestId: string,
   ): Promise<void> {
-    // Fast-path: skip entirely when DB is unreachable
     if (!(await isDbAvailable())) {
       logger.warn(
-        "[LingoMed] DB unavailable — lab report not persisted, analysis result returned without storage",
-        { requestId }
+        "[LingoMed] DB unavailable — lab report not persisted",
+        { requestId },
       );
       return;
     }
 
     try {
-      const explanationMap = new Map(
-        explanations.map((e) => [e.test_name, e])
-      );
-
       const report = await prisma.labReport.create({
         data: {
           userId,
@@ -385,16 +515,15 @@ export class LingoMedAgent {
             ? new Date(patientInfo.report_date)
             : null,
           labName: patientInfo?.lab_name,
-          summary,
+          summary: summaryEn,
           rawOcrText: rawText || null,
         },
       });
 
-      // Persist metrics in bulk
       if (metrics.length > 0) {
         await prisma.labMetric.createMany({
           data: metrics.map((m) => {
-            const explanation = explanationMap.get(m.test_name);
+            const finding = keyFindings.find((f) => f.test_name === m.test_name);
             return {
               labReportId: report.id,
               testName: m.test_name,
@@ -403,18 +532,15 @@ export class LingoMedAgent {
               referenceLow: m.reference_low,
               referenceHigh: m.reference_high,
               severity: m.severity,
-              explanation: explanation?.explanation ?? "",
-              suggestion: explanation?.suggestion ?? "Consult your doctor.",
+              explanation: finding?.explanation ?? "",
+              suggestion: "Consult your doctor.",
             };
           }),
         });
       }
 
-      logger.info(`[LingoMed] Lab report persisted: ${report.id}`, {
-        requestId,
-      });
+      logger.info(`[LingoMed] Lab report persisted: ${report.id}`, { requestId });
     } catch (error) {
-      // Non-fatal: log and continue — DB may be unavailable
       logger.warn("[LingoMed] Failed to persist lab report", {
         requestId,
         error: error instanceof Error ? error.message : String(error),
@@ -423,19 +549,58 @@ export class LingoMedAgent {
   }
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────
+// ─── System Prompt ──────────────────────────────────────────────────
 
-function resolveImageBuffer(payload: Record<string, unknown>): Buffer | null {
-  if (payload.media_base64) {
-    return Buffer.from(payload.media_base64 as string, "base64");
-  }
-  if (payload.image_buffer && Buffer.isBuffer(payload.image_buffer)) {
-    return payload.image_buffer;
-  }
-  return null;
+const LINGO_MED_SYSTEM_PROMPT = `You are Lingo-Med AI, a medical lab report analysis assistant for the Sehat-Agent AI platform in Pakistan.
+
+Your task is to analyze medical lab report images from Pakistani laboratories and provide:
+1. Document validation (is this a valid medical lab report?)
+2. Extraction of all visible test results with values and reference ranges
+3. Severity classification for each test
+4. Controlled substance / high-risk flag detection
+5. Plain-language summaries in BOTH English and Urdu (Nastaliq script)
+
+IMPORTANT RULES:
+- If the image is NOT a valid medical lab report (e.g., school experiment, random photo, recipe, newspaper, selfie, prescription, or medicine packaging), set "is_valid_medical_doc" to false and stop.
+- Always provide summaries in BOTH English and Urdu.
+- Never invent or hallucinate test values — only report what is visible in the image.
+- Classify severity as: NORMAL, BORDERLINE, ABNORMAL, or CRITICAL.
+- Use common Pakistani lab test names (CBC, LFT, RFT, Lipid Profile, HbA1c, etc.).
+- Set "has_high_risk_flag" to true if ANY test result shows critically dangerous values (e.g., extremely high potassium, critically low platelets, troponin elevation suggesting heart attack, or any value that could indicate a life-threatening condition).
+
+You MUST respond with valid JSON in this exact structure:
+{
+  "is_valid_medical_doc": true,
+  "report_type": "Complete Blood Count",
+  "patient_info": { "name": "...", "age": 35, "gender": "Male", "report_date": "...", "lab_name": "..." },
+  "tests": [
+    {
+      "test_name": "Hemoglobin",
+      "value": 14.2,
+      "unit": "g/dL",
+      "reference_low": 13.0,
+      "reference_high": 17.0,
+      "severity": "NORMAL"
+    }
+  ],
+  "key_findings": [
+    { "test_name": "...", "severity": "ABNORMAL", "explanation": "..." }
+  ],
+  "has_high_risk_flag": false,
+  "summary_en": "Plain English summary of findings for the patient.",
+  "summary_ur": "اردو میں خلاصہ — مریض کے لیے آسان الفاظ میں۔",
+  "audio_text": "Text to be read aloud — English first, then Urdu."
 }
 
-// ─── Types ──────────────────────────────────────────────────────────────
+If the image is NOT a valid medical lab report:
+{
+  "is_valid_medical_doc": false,
+  "summary_en": "The uploaded image does not appear to be a medical report, prescription, or medicine package.",
+  "summary_ur": "اپ لوڈ کی گئی تصویر طبی رپورٹ، نسخہ یا دوا کا پیکٹ نہیں لگتی۔",
+  "has_high_risk_flag": false
+}`;
+
+// ─── Types ──────────────────────────────────────────────────────────
 
 type MetricSeverity = "NORMAL" | "BORDERLINE" | "ABNORMAL" | "CRITICAL";
 
@@ -458,6 +623,12 @@ interface MetricExplanation {
   suggestion: string;
 }
 
+interface KeyFinding {
+  test_name: string;
+  severity: string;
+  explanation: string;
+}
+
 interface PatientInfo {
   name?: string;
   age?: number;
@@ -466,12 +637,58 @@ interface PatientInfo {
   lab_name?: string;
 }
 
+/** Discriminated union for non-medical image rejection. */
+interface NonMedicalRejection {
+  rejected: true;
+  error_message_en: string;
+  error_message_ur: string;
+}
+
+/** Raw JSON shape from the Vision LLM response. */
+interface VisionLLMResponse {
+  is_medical?: boolean;
+  is_valid_medical_doc?: boolean;
+  report_type?: string;
+  patient_info?: PatientInfo | null;
+  tests?: Array<{
+    test_name: string;
+    value: number;
+    unit: string;
+    reference_low?: number | null;
+    reference_high?: number | null;
+    severity?: string;
+  }>;
+  key_findings?: KeyFinding[];
+  summary_en?: string;
+  summary_ur?: string;
+  audio_text?: string;
+  has_high_risk_flag?: boolean;
+}
+
+/** Internal output from the Vision analysis step. */
+interface VisionAnalysisOutput {
+  patient_info: PatientInfo | null;
+  report_type: string;
+  key_findings: KeyFinding[];
+  summary_en: string;
+  summary_ur: string;
+  audio_text: string;
+  has_high_risk_flag: boolean;
+  metrics: LabMetric[];
+  flagged_metrics: LabMetric[];
+}
+
 interface LingoMedResult {
   patient_info: PatientInfo | null;
+  report_type?: string;
+  key_findings?: KeyFinding[];
+  summary_en?: string;
+  summary_ur?: string;
+  audio_text?: string;
+  has_high_risk_flag?: boolean;
   metrics: LabMetric[];
   flagged_metrics: LabMetric[];
   summary: string;
-  explanations: MetricExplanation[];
   confidence: number;
   audio_response?: AudioResponse;
 }

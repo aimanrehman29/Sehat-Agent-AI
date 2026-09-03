@@ -172,7 +172,31 @@ export default function LingoMedTestPage() {
                 <StatPill label="Flagged" value={flagged.length} color="bg-red-50 text-red-700" />
                 <StatPill label="Confidence" value={`${((result.confidence_score as number) * 100).toFixed(0)}%`} color="bg-green-50 text-green-700" />
               </div>
-              {!!r.summary && (
+              {/* High-Risk Warning Banner */}
+              {!!r.has_high_risk_flag && (
+                <div className="bg-red-50 border-2 border-red-300 rounded-lg p-4">
+                  <p className="text-sm font-bold text-red-800 mb-1">🚨 HIGH RISK — CRITICAL VALUES DETECTED</p>
+                  <p className="text-xs text-red-700">Some lab values are critically outside normal range. Please contact your doctor immediately.</p>
+                  <p className="text-xs text-red-700 mt-1 font-medium" dir="rtl">🚨 اعلیٰ خطرہ — کچھ لیબ قدریں خطرناک حد تک معمول سے باہر ہیں۔ براہ کرم فوری طور پر اپنے ڈاکٹر سے رابطہ کریں۔</p>
+                </div>
+              )}
+              {/* Bilingual Summaries */}
+              {!!r.summary_en && (
+                <div className="bg-blue-50 rounded-lg p-4">
+                  <p className="text-xs font-medium text-blue-500 mb-1">English Summary</p>
+                  <p className="text-sm text-blue-800 leading-relaxed">{S(r.summary_en)}</p>
+                </div>
+              )}
+              {!!r.summary_ur && (
+                <div className="bg-emerald-50 rounded-lg p-4" dir="rtl">
+                  <p className="text-xs font-medium text-emerald-500 mb-1 text-right">اردو خلاصہ</p>
+                  <p className="text-sm text-emerald-800 leading-relaxed text-right font-medium" style={{ fontFamily: "'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', serif" }}>
+                    {S(r.summary_ur)}
+                  </p>
+                </div>
+              )}
+              {/* Fallback legacy summary */}
+              {!r.summary_en && !r.summary_ur && !!r.summary && (
                 <div className="bg-blue-50 rounded-lg p-4">
                   <p className="text-sm text-blue-800 leading-relaxed">{S(r.summary)}</p>
                 </div>

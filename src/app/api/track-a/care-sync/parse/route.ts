@@ -41,6 +41,23 @@ export async function POST(request: Request) {
     const requestId = crypto.randomUUID();
     const result = await agent.execute(body, requestId);
 
+    // ── Detect non-medical document rejection ──
+    if (result.is_valid_medical_doc === false) {
+      return NextResponse.json(
+        applyErrorGuardrail({
+          request_id: requestId,
+          agent_source: "care-sync",
+          error_code: "NON_MEDICAL_IMAGE",
+          error_message: result.summary_en ?? "Not a valid prescription image.",
+          error_details: {
+            error_message_ur: result.summary_ur ?? "اپ لوڈ کی گئی تصویر طبی رپورٹ، نسخہ یا دوا کا پیکٹ نہیں لگتی۔",
+          },
+          processing_time_ms: Date.now() - startTime,
+        }),
+        { status: 400 },
+      );
+    }
+
     const response = applyGuardrails({
       request_id: requestId,
       agent_source: "care-sync",
