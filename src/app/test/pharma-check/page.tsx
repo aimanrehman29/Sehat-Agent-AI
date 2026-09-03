@@ -11,6 +11,10 @@ import VoiceResponsePlayer from "@/components/voice/VoiceResponsePlayer";
 import AgentFollowUpChat from "@/components/chat/AgentFollowUpChat";
 import type { VoiceRecording } from "@/lib/voice/recorder";
 import type { AudioResponse } from "@/lib/voice/tts";
+import {
+  requestNotificationPermission,
+  scheduleMedicineReminders,
+} from "@/lib/notifications/medicineReminder";
 
 export default function PharmaCheckTestPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -25,6 +29,7 @@ export default function PharmaCheckTestPage() {
     transcript_text: string;
   } | null>(null);
   const [audioResponse, setAudioResponse] = useState<AudioResponse | null>(null);
+  const [browserNotifStatus, setBrowserNotifStatus] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   function handleFile(f: File) {
@@ -89,6 +94,34 @@ export default function PharmaCheckTestPage() {
     HIGH_RISK: "bg-orange-100 text-orange-800 border-orange-300",
     CRITICAL: "bg-red-100 text-red-800 border-red-300",
   };
+
+  const S = (v: unknown): string => (v == null ? "" : String(v));
+
+  async function activateBrowserNotifications() {
+    setBrowserNotifStatus("requesting...");
+    const permission = await requestNotificationPermission();
+
+    if (permission !== "granted") {
+      setBrowserNotifStatus(`Permission ${permission}. Enable notifications in browser settings.`);
+      return;
+    }
+
+    const brandName = S(r?.brand_name) || S(r?.scanned_item) || "Medicine";
+    const strength = S(r?.strength) || "as prescribed";
+
+    const added = scheduleMedicineReminders([{
+      medicine_name: brandName,
+      dosage: strength,
+      scheduled_times: ["08:00", "20:00"],
+      times_per_day: 2,
+    }]);
+
+    setBrowserNotifStatus(
+      added.length > 0
+        ? `✅ Browser reminder set for ${brandName}! Notifications will fire at scheduled times.`
+        : "Reminder already set for this medicine."
+    );
+  }
 
   return (
     <div>
@@ -258,6 +291,69 @@ export default function PharmaCheckTestPage() {
             <InfoCard label="Expiry" value={(drug.expiry_date as string) || "—"} />
             <InfoCard label="Active" value={drug.is_active ? "✅ Yes" : "❌ No"} />
           </div>
+        </div>
+      )}
+
+      {/* High-Risk Controlled Drug Warning */}
+      {!!r?.has_high_risk_flag && (
+        <div className="bg-red-50 border-2 border-red-300 rounded-xl p-5 mb-6">
+          <p className="text-sm font-bold text-red-800 mb-1">🚨 HIGH RISK — CONTROLLED SUBSTANCE DETECTED</p>
+          <p className="text-xs text-red-700">This medicine is a controlled substance. Strict doctor supervision and local hospital verification are required.</p>
+          <p className="text-xs text-red-700 mt-2 font-medium" dir="rtl">🚨 اعلیٰ خطرہ — کنٹرول شدہ دوا پائی گئی۔ سخت ڈاکٹر کی نگرانی اور قریبی ہسپتال سے تصدیق ضروری ہے۔</p>
+        </div>
+      )}
+
+      {/* Bilingual Summaries */}
+      {result && r && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          {!!r.summary_en && (
+            <div className="bg-blue-50 rounded-xl border border-blue-200 p-5">
+              <p className="text-xs font-medium text-blue-500 mb-1">English Summary</p>
+              <p className="text-sm text-blue-800 leading-relaxed">{S(r.summary_en)}</p>
+            </div>
+          )}
+          {!!r.summary_ur && (
+            <div className="bg-emerald-50 rounded-xl border border-emerald-200 p-5" dir="rtl">
+              <p className="text-xs font-medium text-emerald-500 mb-1 text-right">اردو خلاصہ</p>
+              <p className="text-sm text-emerald-800 leading-relaxed text-right font-medium" style={{ fontFamily: "'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', serif" }}>
+                {S(r.summary_ur)}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Browser Notification Reminder Button */}
+      {result && r && S(r.scanned_item) !== "No image" && S(r.scanned_item) !== "Analysis failed" && (
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-200 p-6 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-sm font-semibold text-blue-800 uppercase tracking-wider">
+                🔔 Medicine Reminder
+              </h3>
+              <p className="text-xs text-blue-600 mt-1">
+                Set a web notification reminder for {S(r.brand_name) || S(r.scanned_item) || "this medicine"}.
+              </p>
+              <p className="text-xs text-blue-600 mt-0.5" dir="rtl">
+                دوائی کے لیے ریمائنڈر لگائیں
+              </p>
+            </div>
+            <button
+              onClick={activateBrowserNotifications}
+              className="px-5 py-2.5 rounded-lg font-medium text-sm transition-colors bg-blue-600 text-white hover:bg-blue-700 shadow-sm"
+            >
+              🔔 Set Medicine Reminder
+            </button>
+          </div>
+          {browserNotifStatus && (
+            <div className={`mt-3 rounded-lg p-3 text-sm ${
+              browserNotifStatus.startsWith("✅")
+                ? "bg-green-50 border border-green-200 text-green-800"
+                : "bg-amber-50 border border-amber-200 text-amber-700"
+            }`}>
+              <p className="font-medium">{browserNotifStatus}</p>
+            </div>
+          )}
         </div>
       )}
 

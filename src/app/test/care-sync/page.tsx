@@ -11,6 +11,10 @@ import VoiceResponsePlayer from "@/components/voice/VoiceResponsePlayer";
 import AgentFollowUpChat from "@/components/chat/AgentFollowUpChat";
 import type { VoiceRecording } from "@/lib/voice/recorder";
 import type { AudioResponse } from "@/lib/voice/tts";
+import {
+  requestNotificationPermission,
+  scheduleMedicineReminders,
+} from "@/lib/notifications/medicineReminder";
 
 export default function CareSyncTestPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -21,6 +25,7 @@ export default function CareSyncTestPage() {
   const [elapsed, setElapsed] = useState<number>(0);
   const [reminderLoading, setReminderLoading] = useState(false);
   const [reminderResult, setReminderResult] = useState<Record<string, unknown> | null>(null);
+  const [browserNotifStatus, setBrowserNotifStatus] = useState<string | null>(null);
   const [voicePayload, setVoicePayload] = useState<{
     audio_base64: string;
     audio_mime_type: string;
@@ -119,6 +124,47 @@ export default function CareSyncTestPage() {
       });
     } finally {
       setReminderLoading(false);
+    }
+  }
+
+  async function activateBrowserNotifications() {
+    setBrowserNotifStatus("requesting...");
+    const permission = await requestNotificationPermission();
+
+    if (permission !== "granted") {
+      setBrowserNotifStatus(`Permission ${permission}. Enable notifications in browser settings.`);
+      return;
+    }
+
+    // Build reminder payload from medicines
+    const medList = medicines.map((med) => ({
+      medicine_name: S(med.name),
+      dosage: S(med.dosage) || "as prescribed",
+      scheduled_times: (med.scheduled_times as string[]) || [],
+      times_per_day: (med.times_per_day as number) || 0,
+    }));
+
+    // Also use scheduled_times from reminders if medicines don't have them
+    if (medList.every((m) => m.scheduled_times.length === 0)) {
+      const reminderTimes = reminders.map((rem) => ({
+        medicine_name: S(rem.medicine_name),
+        dosage: "as prescribed",
+        scheduled_times: extractTimesFromCrons((rem.cron_expressions as string[]) || []),
+        times_per_day: ((rem.cron_expressions as string[]) || []).length,
+      }));
+      const added = scheduleMedicineReminders(reminderTimes);
+      setBrowserNotifStatus(
+        added.length > 0
+          ? `✅ ${added.length} browser reminder${added.length > 1 ? "s" : ""} set! Notifications will fire at scheduled times.`
+          : "No schedulable medicines found."
+      );
+    } else {
+      const added = scheduleMedicineReminders(medList);
+      setBrowserNotifStatus(
+        added.length > 0
+          ? `✅ ${added.length} browser reminder${added.length > 1 ? "s" : ""} set! Notifications will fire at scheduled times.`
+          : "No schedulable medicines found."
+      );
     }
   }
 
@@ -237,6 +283,35 @@ export default function CareSyncTestPage() {
         </div>
       </div>
 
+      {/* High-Risk Controlled Drug Warning */}
+      {!!r?.has_high_risk_flag && (
+        <div className="bg-red-50 border-2 border-red-300 rounded-xl p-5 mb-6">
+          <p className="text-sm font-bold text-red-800 mb-1">🚨 HIGH RISK — CONTROLLED SUBSTANCE DETECTED</p>
+          <p className="text-xs text-red-700">This prescription contains controlled substances. Strict doctor supervision is required. Verify at your local hospital or pharmacy.</p>
+          <p className="text-xs text-red-700 mt-2 font-medium" dir="rtl">🚨 اعلیٰ خطرہ — کنٹرول شدہ ادویات پائی گئیں۔ سخت ڈاکٹر کی نگرانی ضروری ہے۔ اپنے قریبی ہسپتال یا فارمیسی سے تصدیق کریں۔</p>
+        </div>
+      )}
+
+      {/* Bilingual Summaries */}
+      {result && r && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          {!!r.summary_en && (
+            <div className="bg-purple-50 rounded-xl border border-purple-200 p-5">
+              <p className="text-xs font-medium text-purple-500 mb-1">English Summary</p>
+              <p className="text-sm text-purple-800 leading-relaxed">{S(r.summary_en)}</p>
+            </div>
+          )}
+          {!!r.summary_ur && (
+            <div className="bg-emerald-50 rounded-xl border border-emerald-200 p-5" dir="rtl">
+              <p className="text-xs font-medium text-emerald-500 mb-1 text-right">اردو خلاصہ</p>
+              <p className="text-sm text-emerald-800 leading-relaxed text-right font-medium" style={{ fontFamily: "'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', serif" }}>
+                {S(r.summary_ur)}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Medicines List */}
       {medicines.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
@@ -318,6 +393,7 @@ export default function CareSyncTestPage() {
                   ? "bg-green-50 border border-green-200 text-green-800"
                   : "bg-red-50 border border-red-200 text-red-700"
               }`}
+
             >
               <p className="font-medium">
                 {(reminderResult.success as boolean) ? "✅" : "⚠️"}{" "}
@@ -328,6 +404,40 @@ export default function CareSyncTestPage() {
                   {reminderResult.activated_count as number} reminder{(reminderResult.activated_count as number) > 1 ? "s" : ""} created.
                 </p>
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Browser Notification Reminder Button */}
+      {medicines.length > 0 && (
+        <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-200 p-6 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-sm font-semibold text-indigo-800 uppercase tracking-wider">
+                🔔 Browser Medicine Reminders
+              </h3>
+              <p className="text-xs text-indigo-600 mt-1">
+                Get web notifications at scheduled times for {medicines.length} medicine{medicines.length !== 1 ? "s" : ""}.
+              </p>
+              <p className="text-xs text-indigo-600 mt-0.5" dir="rtl">
+                دوائی کے لیے ریمائنڈر لگائیں — مقررہ وقت پر ویب نوٹیفکیشن حاصل کریں۔
+              </p>
+            </div>
+            <button
+              onClick={activateBrowserNotifications}
+              className="px-5 py-2.5 rounded-lg font-medium text-sm transition-colors bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm"
+            >
+              🔔 Set Medicine Reminder
+            </button>
+          </div>
+          {browserNotifStatus && (
+            <div className={`mt-3 rounded-lg p-3 text-sm ${
+              browserNotifStatus.startsWith("✅")
+                ? "bg-green-50 border border-green-200 text-green-800"
+                : "bg-amber-50 border border-amber-200 text-amber-700"
+            }`}>
+              <p className="font-medium">{browserNotifStatus}</p>
             </div>
           )}
         </div>
@@ -414,4 +524,14 @@ function fileToBase64(file: File): Promise<string> {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+function extractTimesFromCrons(crons: string[]): string[] {
+  return crons.map((cron) => {
+    const parts = cron.split(" ");
+    const minute = parseInt(parts[0], 10);
+    const hour = parseInt(parts[1], 10);
+    if (isNaN(hour) || isNaN(minute)) return null;
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  }).filter(Boolean) as string[];
 }

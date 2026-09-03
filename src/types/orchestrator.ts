@@ -198,6 +198,22 @@ export interface PharmaCheckResult {
   recommended_action: string;
   /** Mandatory disclaimer text */
   disclaimer: string;
+  /** Vision-extracted brand name */
+  brand_name?: string | null;
+  /** Vision-extracted generic name */
+  generic_name?: string | null;
+  /** Vision-extracted dosage strength */
+  strength?: string | null;
+  /** Verification status (VERIFIED/UNVERIFIED) */
+  verification_status?: string;
+  /** English safety warnings */
+  safety_warnings_en?: string[];
+  /** Urdu safety warnings */
+  safety_warnings_ur?: string[];
+  /** English summary */
+  summary_en?: string;
+  /** Urdu summary */
+  summary_ur?: string;
   /** Optional TTS spoken summary — populated by the agent, consumed by VoiceResponsePlayer */
   audio_response?: AudioResponse;
 }
@@ -247,7 +263,17 @@ export interface LingoMedResult {
   /** Plain-language summary of the entire report */
   summary: string;
   /** Simplified explanations for each flagged metric */
-  explanations: MetricExplanation[];
+  explanations?: MetricExplanation[];
+  /** Report type (e.g. Complete Blood Count) */
+  report_type?: string;
+  /** Key findings from the report */
+  key_findings?: Array<{ test_name: string; severity: string; explanation: string }>;
+  /** English summary */
+  summary_en?: string;
+  /** Urdu summary (اردو خلاصہ) */
+  summary_ur?: string;
+  /** Text for TTS spoken summary */
+  audio_text?: string;
   /** Optional TTS spoken summary */
   audio_response?: AudioResponse;
 }
@@ -297,6 +323,14 @@ export interface CareSyncResult {
   reminders: ReminderSchedule[];
   /** Raw OCR text (for debugging / verification) */
   raw_extracted_text: string;
+  /** Prescription database ID (if persisted) */
+  prescription_id?: string | null;
+  /** Confidence score */
+  confidence?: number;
+  /** English summary */
+  summary_en?: string;
+  /** Urdu summary (اردو خلاصہ) */
+  summary_ur?: string;
   /** Optional TTS spoken summary */
   audio_response?: AudioResponse;
 }
