@@ -169,23 +169,48 @@ export async function POST(req: NextRequest) {
         return await handleTriageChain(text, requestId, session_id, latitude, longitude, province, startTime);
       }
 
-      case "doctor_lookup":
-        // Delegate directly — full body already has what /locate/doctors needs.
-        // Not wired in this task — call /api/track-b/locate/doctors directly
-        // from the UI for now, or extend this case if you want it fully chained.
-        return NextResponse.json(
-          applyErrorGuardrail({
-            request_id: requestId,
-            agent_source: "orchestrator",
-            error_code: "NOT_YET_WIRED",
-            error_message:
-              "Doctor lookup routing from the Orchestrator is not wired in this task — " +
-              "call /api/track-b/locate/doctors directly from the UI for now, or extend this " +
-              "case if you want it fully chained.",
-            processing_time_ms: Date.now() - startTime,
-          }),
-          { status: 501 }
-        );
+      case "doctor_lookup": {
+        console.log(`[Orchestrator] Routing to Doctor Lookup API`, { requestId, text });
+        
+        try {
+          // Get the base URL to make an internal server-to-server call
+          const baseUrl = process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin;
+          
+          // Hit the already-built Doctor Lookup endpoint
+          const doctorRes = await fetch(`${baseUrl}/api/track-b/locate/doctors`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+              text: text, 
+              province: province, 
+              session_id: session_id, 
+              latitude: latitude, 
+              longitude: longitude,
+              // API ki requirement poori karne ke liye parameters inject kar diye:
+              department: text, 
+              areaHint: province || "Pakistan" 
+            })
+          });
+          
+          const doctorData = await doctorRes.json();
+          updateSession(session_id, { last_agent_used: "doctor-lookup" });
+          
+          // Return the actual agent's response back to the UI
+          return NextResponse.json(doctorData, { status: doctorRes.status });
+          
+        } catch (error) {
+          return NextResponse.json(
+            applyErrorGuardrail({
+              request_id: requestId,
+              agent_source: "doctor-lookup",
+              error_code: "ROUTING_FAILED",
+              error_message: "Could not connect to the doctor lookup agent. Please try again.",
+              processing_time_ms: Date.now() - startTime,
+            }),
+            { status: 500 }
+          );
+        }
+      }
 
       case "drug_verification":
       case "lab_report":

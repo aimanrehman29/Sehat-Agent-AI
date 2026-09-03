@@ -42,7 +42,7 @@ const INTENT_KEYWORDS: Record<
   ],
   doctor_lookup: [
     "doctor", "specialist", "cardiologist", "consultant",
-    "appointment with dr",
+    "appointment with dr", "dr.", "dr ", "physician", "surgeon",
   ],
   hospital_search: [
     "hospital", "nearest", "near me", "clinic", "location",

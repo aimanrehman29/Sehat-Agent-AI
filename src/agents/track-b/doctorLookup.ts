@@ -1,4 +1,3 @@
-import { GoogleGenAI } from "@google/genai";
 import { logger } from "@/lib/logger";
 
 export interface DoctorLookupParams {
@@ -16,29 +15,31 @@ export interface DoctorLookupResult {
   found: boolean;
   summary_text: string;
   disclaimer: string;
-  source: "gemini_grounded_search" | "unavailable";
+  source: "serper_web_search" | "unavailable";
 }
 
 const SEARCH_DISCLAIMER =
   "This information comes from a live web search and may be out of date. " +
   "Please confirm timings directly with the hospital before visiting.";
 
-let _client: GoogleGenAI | null = null;
-
-function getClient(): GoogleGenAI | null {
-  if (_client) return _client;
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
-  _client = new GoogleGenAI({ apiKey });
-  return _client;
+/**
+ * Serper.dev API response shape (subset of fields we use).
+ * See: https://serper.dev/docs/google-search-api
+ */
+interface SerperResponse {
+  organic?: Array<{
+    title?: string;
+    snippet?: string;
+    link?: string;
+  }>;
 }
 
 export async function lookupDoctors(
   params: DoctorLookupParams
 ): Promise<DoctorLookupResult> {
-  const client = getClient();
-  if (!client) {
-    logger.warn("[DoctorLookup] GEMINI_API_KEY not set - feature unavailable");
+  const apiKey = process.env.SERPER_API_KEY;
+  if (!apiKey) {
+    logger.warn("[DoctorLookup] SERPER_API_KEY not set — feature unavailable");
     return {
       found: false,
       summary_text:
@@ -54,31 +55,56 @@ export async function lookupDoctors(
       ? `${params.doctorName} doctor ${params.department} hospital ${params.areaHint} Pakistan practicing hours`
       : `best ${params.department} specialists ${params.hospitalName ?? ""} ${params.areaHint} Pakistan hospital timings`;
 
-    const interaction = await client.interactions.create({
-      model: "gemini-3.6-flash",
-      input: query,
-      tools: [{ type: "google_search" }],
+    const res = await fetch("https://google.serper.dev/search", {
+      method: "POST",
+      headers: {
+        "X-API-KEY": apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ q: query, gl: "pk", hl: "en" }),
     });
 
-    const text = interaction.output_text ?? "";
+    if (!res.ok) {
+      const errorBody = await res.text();
+      logger.error(`[DoctorLookup] Serper API returned ${res.status}`, { errorBody });
+      return {
+        found: false,
+        summary_text: "Doctor lookup failed. Please try again or search manually.",
+        disclaimer: SEARCH_DISCLAIMER,
+        source: "unavailable",
+      };
+    }
 
-    if (!text || text.trim().length === 0) {
+    const data: SerperResponse = await res.json();
+    const organic = data.organic;
+
+    if (!organic || organic.length === 0) {
       return {
         found: false,
         summary_text: "No results found for this search. Try a different department or area.",
         disclaimer: SEARCH_DISCLAIMER,
-        source: "gemini_grounded_search",
+        source: "serper_web_search",
       };
     }
 
+    // Combine top organic results into a readable summary.
+    const MAX_RESULTS = 5;
+    const lines = organic.slice(0, MAX_RESULTS).map((r) => {
+      const title = r.title ?? "";
+      const snippet = r.snippet ?? "";
+      return title ? `${title}\n${snippet}` : snippet;
+    });
+
+    const summary_text = lines.filter(Boolean).join("\n\n");
+
     return {
-      found: true,
-      summary_text: text.trim(),
+      found: summary_text.length > 0,
+      summary_text: summary_text || "No results found for this search. Try a different department or area.",
       disclaimer: SEARCH_DISCLAIMER,
-      source: "gemini_grounded_search",
+      source: "serper_web_search",
     };
   } catch (error) {
-    logger.error("[DoctorLookup] Gemini search failed", {
+    logger.error("[DoctorLookup] Serper search failed", {
       error: error instanceof Error ? error.message : String(error),
     });
     return {
