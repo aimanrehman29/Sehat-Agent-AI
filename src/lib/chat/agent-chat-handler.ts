@@ -10,11 +10,14 @@
  * Strategy:
  *   1. Build a system prompt embedding the serialized analysis result plus a
  *      hard safety fence (assist, never diagnose).
- *   2. Call OpenAI gpt-4o with the conversation history.
- *   3. If OPENAI_API_KEY is missing or the call fails, fall back to a safe
+ *   2. Call Gemini (GEMINI_2_KEY) with the conversation history.
+ *   3. If GEMINI_2_KEY is missing or the call fails, fall back to OpenAI
+ *      gpt-4o (OPENAI_API_KEY).
+ *   4. If neither provider is configured or both fail, fall back to a safe
  *      deterministic reply — never throw.
  */
 
+import { GoogleGenAI } from "@google/genai";
 import OpenAI from "openai";
 import { logger } from "@/lib/logger";
 import type { ChatMessage } from "@/lib/validation/chat.schema";
@@ -74,7 +77,21 @@ const SAFETY_FENCE =
   "6. If the user asks you to reply in Urdu, reply in Urdu (Urdu script). " +
   "Otherwise reply in the language of the user's question.";
 
-// ─── Lazy OpenAI client ──────────────────────────────────────────────────────
+// ─── Lazy Gemini client (preferred provider) ───────────────────────────────────
+
+/** Gemini model used for follow-up chat replies. */
+const GEMINI_CHAT_MODEL = "gemini-3.6-flash";
+
+let _gemini: GoogleGenAI | null | undefined;
+
+function getGeminiClient(): GoogleGenAI | null {
+  if (_gemini !== undefined) return _gemini;
+  const apiKey = process.env.GEMINI_2_KEY;
+  _gemini = apiKey ? new GoogleGenAI({ apiKey }) : null;
+  return _gemini;
+}
+
+// ─── Lazy OpenAI client (fallback provider) ────────────────────────────────────
 
 let _openai: OpenAI | null = null;
 
@@ -151,6 +168,62 @@ export async function getChatReply(
   requestId: string
 ): Promise<ChatReplyResult> {
   const { session_id, agent_target, initial_context, messages } = params;
+
+  // ── Provider chain: Gemini (GEMINI_2_KEY) → OpenAI (OPENAI_API_KEY) → offline ──
+
+  const gemini = getGeminiClient();
+  if (gemini) {
+    try {
+      const completion = await gemini.models.generateContent({
+        model: GEMINI_CHAT_MODEL,
+        contents: messages.map((m) => ({
+          // Gemini uses "model" where OpenAI uses "assistant"
+          role: m.role === "assistant" ? "model" : "user",
+          parts: [{ text: m.content }],
+        })),
+        config: {
+          systemInstruction: buildSystemPrompt(agent_target, initial_context),
+          temperature: 0.3,
+          maxOutputTokens: 600,
+        },
+      });
+
+      const reply = completion.text?.trim() ?? "";
+      if (reply) {
+        logger.info("[AgentChat] Reply generated via Gemini", {
+          requestId,
+          sessionId: session_id,
+          agentTarget: agent_target,
+          historyLength: messages.length,
+          replyChars: reply.length,
+        });
+        return {
+          reply,
+          session_id,
+          agent_target,
+          message_count: messages.length + 1,
+        };
+      }
+      logger.warn("[AgentChat] Empty Gemini completion — falling back to OpenAI", {
+        requestId,
+        sessionId: session_id,
+        agentTarget: agent_target,
+      });
+    } catch (error) {
+      logger.warn("[AgentChat] Gemini call failed — falling back to OpenAI", {
+        requestId,
+        sessionId: session_id,
+        agentTarget: agent_target,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  } else {
+    logger.debug("[AgentChat] GEMINI_2_KEY not set — skipping Gemini path", {
+      requestId,
+      sessionId: session_id,
+      agentTarget: agent_target,
+    });
+  }
 
   const openai = getOpenAIClient();
   if (!openai) {

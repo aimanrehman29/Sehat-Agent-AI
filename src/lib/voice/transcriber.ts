@@ -9,15 +9,17 @@
  * Strategy:
  *   1. If `transcript_text` is already present in the payload, use it directly
  *      (client pre-transcribed via Web Speech API — no server cost).
- *   2. If `audio_base64` is present and OPENAI_API_KEY is configured, send the
- *      audio to Whisper and return the transcript.
- *   3. If neither is available, return null (agents fall back to image-only
- *      context).
+ *   2. If `audio_base64` is present and GEMINI_2_KEY is configured, send the
+ *      audio to Gemini and return the transcript.
+ *   3. If Gemini is unavailable, fall back to OpenAI Whisper (OPENAI_API_KEY).
+ *   4. If neither is available, return an empty transcript (agents fall back
+ *      to image-only context).
  *
  * Supported audio MIME types:
  *   audio/webm, audio/wav, audio/mpeg (mp3), audio/mp4 (m4a), audio/ogg
  */
 
+import { GoogleGenAI } from "@google/genai";
 import OpenAI from "openai";
 import { logger } from "@/lib/logger";
 
@@ -43,10 +45,11 @@ export interface TranscriptionResult {
   /**
    * How the transcript was obtained:
    * - "pre_transcribed"  — caller already sent `transcript_text`
+   * - "gemini"           — sent to Gemini (GEMINI_2_KEY)
    * - "whisper"          — sent to OpenAI Whisper
    * - "none"             — no audio / no key available
    */
-  source: "pre_transcribed" | "whisper" | "none";
+  source: "pre_transcribed" | "gemini" | "whisper" | "none";
   /** Detected language code if Whisper returned one (e.g. "ur", "en"). */
   detected_language?: string;
 }
@@ -66,7 +69,21 @@ const MIME_TO_EXT: Record<string, string> = {
   "audio/ogg": "ogg",
 };
 
-// ─── Lazy OpenAI client ───────────────────────────────────────────────────────
+// ─── Lazy Gemini client (preferred provider) ──────────────────────────────────
+
+/** Gemini model used for audio transcription. */
+const GEMINI_TRANSCRIBE_MODEL = "gemini-3.6-flash";
+
+let _gemini: GoogleGenAI | null | undefined;
+
+function getGeminiClient(): GoogleGenAI | null {
+  if (_gemini !== undefined) return _gemini;
+  const apiKey = process.env.GEMINI_2_KEY;
+  _gemini = apiKey ? new GoogleGenAI({ apiKey }) : null;
+  return _gemini;
+}
+
+// ─── Lazy OpenAI client (fallback provider) ────────────────────────────────────
 
 let _openai: OpenAI | null = null;
 
@@ -107,22 +124,68 @@ export async function transcribeVoicePayload(
     };
   }
 
-  // ── Whisper path: send audio buffer ──
+  // ── Server-side path: audio buffer present, transcribe via provider chain ──
   if (!payload.audio_base64) {
     return { transcript: "", source: "none" };
+  }
+
+  const mimeType = payload.audio_mime_type ?? "audio/webm";
+
+  // ── Gemini path (GEMINI_2_KEY) — preferred ──
+  const gemini = getGeminiClient();
+  if (gemini) {
+    try {
+      const response = await gemini.models.generateContent({
+        model: GEMINI_TRANSCRIBE_MODEL,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text:
+                  "Transcribe this audio clip exactly as spoken. It may be in " +
+                  "English, Urdu, or a mix of both. Reply with only the " +
+                  "transcript text — no labels, no commentary.",
+              },
+              { inlineData: { data: payload.audio_base64, mimeType } },
+            ],
+          },
+        ],
+      });
+
+      const transcript = response.text?.trim() ?? "";
+
+      logger.info("[Transcriber] Gemini transcription complete", {
+        requestId,
+        chars: transcript.length,
+      });
+
+      return { transcript, source: "gemini" };
+    } catch (error) {
+      logger.warn(
+        "[Transcriber] Gemini transcription failed — falling back to Whisper",
+        {
+          requestId,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      );
+    }
+  } else {
+    logger.debug("[Transcriber] GEMINI_2_KEY not set — trying Whisper", {
+      requestId,
+    });
   }
 
   const openai = getOpenAIClient();
   if (!openai) {
     logger.warn(
-      "[Transcriber] OPENAI_API_KEY not set — voice transcription skipped",
+      "[Transcriber] Neither GEMINI_2_KEY nor OPENAI_API_KEY set — voice transcription skipped",
       { requestId }
     );
     return { transcript: "", source: "none" };
   }
 
   try {
-    const mimeType = payload.audio_mime_type ?? "audio/webm";
     const ext = MIME_TO_EXT[mimeType] ?? "webm";
 
     // Decode base64 → Buffer → File-like object for the Whisper endpoint
