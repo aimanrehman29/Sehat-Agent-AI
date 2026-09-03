@@ -127,8 +127,8 @@ export interface VoiceTranscriptionResult {
   /** Transcribed text (empty string if transcription was unavailable). */
   transcript: string;
   /** Source of the transcript. */
-  source: "pre_transcribed" | "whisper" | "none";
-  /** Language code detected by Whisper (e.g. "en", "ur"). */
+  source: "pre_transcribed" | "gemini" | "whisper" | "none";
+  /** Language code detected by the transcription provider (e.g. "en", "ur"). */
   detected_language?: string;
 }
 

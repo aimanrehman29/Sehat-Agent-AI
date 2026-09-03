@@ -14,7 +14,7 @@
  * Response (JSON):
  *   {
  *     transcript:          string,
- *     source:              "whisper" | "pre_transcribed" | "none",
+ *     source:              "gemini" | "whisper" | "pre_transcribed" | "none",
  *     detected_language?:  string,
  *   }
  *
@@ -69,7 +69,10 @@ export async function POST(request: Request) {
       agent_source: "voice-transcribe",
       status: "success",
       result,
-      confidence_score: result.source === "whisper" ? 0.92 : 0.0,
+      confidence_score:
+        result.source === "whisper" || result.source === "gemini"
+          ? 0.92
+          : 0.0,
       processing_time_ms: Date.now() - startTime,
     });
 

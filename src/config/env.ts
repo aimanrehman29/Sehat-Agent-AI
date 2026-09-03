@@ -23,6 +23,10 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default("gpt-4o"),
 
+  // Gemini (Track A follow-up chat + voice transcription)
+  // Preferred over OPENAI_API_KEY when set.
+  GEMINI_2_KEY: z.string().optional(),
+
   // Scheduling
   CRON_TIMEZONE: z.string().default("Asia/Karachi"),
 

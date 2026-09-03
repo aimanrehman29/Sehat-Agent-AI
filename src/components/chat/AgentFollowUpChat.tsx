@@ -451,7 +451,7 @@ export default function AgentFollowUpChat({
               ? "Transcribing your recording…"
               : recorder.error
                 ? `${recorder.error} — you can still type your question.`
-                : "Couldn't transcribe your recording — please type your question, or set OPENAI_API_KEY to enable server-side transcription."}
+                : "Couldn't transcribe your recording — please type your question, or set GEMINI_2_KEY to enable server-side transcription."}
         </p>
       )}
     </div>
