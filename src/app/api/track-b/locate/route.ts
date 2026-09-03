@@ -10,6 +10,9 @@ import { NextResponse } from "next/server";
 import { applyGuardrails, applyErrorGuardrail } from "@/lib/guardrails/disclaimer";
 import { executeGeoLocate } from "@/agents/track-b/geoLocator";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 15;
+
 export async function POST(request: Request) {
   const startTime = Date.now();
 

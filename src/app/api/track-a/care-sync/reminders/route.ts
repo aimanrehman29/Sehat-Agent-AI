@@ -17,6 +17,9 @@ import {
 } from "@/lib/validation/care-sync.schema";
 import { createLogger } from "@/lib/logger";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 15;
+
 const log = createLogger("care-sync-reminders");
 
 export async function POST(request: Request) {

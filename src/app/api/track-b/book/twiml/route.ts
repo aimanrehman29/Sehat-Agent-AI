@@ -23,6 +23,9 @@
 import { NextResponse } from "next/server";
 import { buildBookingScript } from "@/agents/track-b/bookingScript";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 15;
+
 // ─── TwiML XML Helpers ──────────────────────────────────────────────────────
 
 /**

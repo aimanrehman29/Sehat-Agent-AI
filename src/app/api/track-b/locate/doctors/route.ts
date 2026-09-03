@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { lookupDoctors } from "@/agents/track-b/doctorLookup";
 import { applyGuardrails, applyErrorGuardrail } from "@/lib/guardrails/disclaimer";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 15;
+
 export async function POST(req: NextRequest) {
   const startTime = Date.now();
   const requestId = crypto.randomUUID();

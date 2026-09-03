@@ -13,6 +13,9 @@ import { NextResponse } from "next/server";
 import { applyGuardrails, applyErrorGuardrail } from "@/lib/guardrails/disclaimer";
 import { CareSyncAgent } from "@/agents/track-a/careSync";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 15;
+
 const agent = new CareSyncAgent();
 
 export async function POST(request: Request) {

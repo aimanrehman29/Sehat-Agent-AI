@@ -14,6 +14,9 @@ import { applyGuardrails, applyErrorGuardrail } from "@/lib/guardrails/disclaime
 import { executeTriage } from "@/agents/track-b/triage";
 import { executeEmergencyCheck } from "@/agents/track-b/emergencyEscalation";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 15;
+
 export async function POST(request: Request) {
   const startTime = Date.now();
 
@@ -32,9 +35,6 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
-
-    // ── Simulate NLP processing delay ──
-    await new Promise((r) => setTimeout(r, 1200));
 
     const requestId = crypto.randomUUID();
 

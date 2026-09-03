@@ -26,6 +26,9 @@ import { z } from "zod";
 import { transcribeVoicePayload } from "@/lib/voice/transcriber";
 import { applyGuardrails, applyErrorGuardrail } from "@/lib/guardrails/disclaimer";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 15;
+
 const TranscribeRequestSchema = z.object({
   audio_base64: z.string().min(1, "audio_base64 must not be empty"),
   audio_mime_type: z

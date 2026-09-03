@@ -12,6 +12,9 @@ import { NextResponse } from "next/server";
 import { applyGuardrails, applyErrorGuardrail } from "@/lib/guardrails/disclaimer";
 import { LingoMedAgent } from "@/agents/track-a/lingoMed";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 15;
+
 const agent = new LingoMedAgent();
 
 export async function POST(request: Request) {

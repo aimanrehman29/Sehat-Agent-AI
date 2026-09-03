@@ -36,6 +36,9 @@ import {
   applyErrorGuardrail,
 } from "@/lib/guardrails/disclaimer";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 15;
+
 // ─── Main Handler ───────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {

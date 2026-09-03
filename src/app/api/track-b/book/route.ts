@@ -12,6 +12,9 @@ import { executeAutoBooking } from "@/agents/track-b/autoBooking";
 import { validateBookingRequest } from "@/lib/validation/booking.schema";
 import { ZodError } from "zod";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 15;
+
 export async function POST(request: Request) {
   const startTime = Date.now();
 

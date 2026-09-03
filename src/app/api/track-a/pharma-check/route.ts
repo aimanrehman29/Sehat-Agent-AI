@@ -12,6 +12,9 @@ import { NextResponse } from "next/server";
 import { applyGuardrails, applyErrorGuardrail } from "@/lib/guardrails/disclaimer";
 import { PharmaCheckAgent } from "@/agents/track-a/pharmaCheck";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 15;
+
 const agent = new PharmaCheckAgent();
 
 export async function POST(request: Request) {

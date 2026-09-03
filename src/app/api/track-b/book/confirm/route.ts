@@ -23,6 +23,9 @@ import {
   getActiveCallStore,
 } from "@/agents/track-b/autoBooking";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 15;
+
 // ─── Form Data Parser ───────────────────────────────────────────────────────
 
 /**

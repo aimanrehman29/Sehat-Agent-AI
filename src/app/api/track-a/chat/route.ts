@@ -24,6 +24,9 @@ import { getChatReply } from "@/lib/chat/agent-chat-handler";
 import { ChatRequestSchema } from "@/lib/validation/chat.schema";
 import { applyGuardrails, applyErrorGuardrail } from "@/lib/guardrails/disclaimer";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 15;
+
 export async function POST(request: Request) {
   const startTime = Date.now();
   const requestId = crypto.randomUUID();

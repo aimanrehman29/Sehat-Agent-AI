@@ -29,6 +29,11 @@ const globalForPrisma = globalThis as unknown as {
 export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({
+    // When DATABASE_URL is not set (e.g. Vercel deploy without DB configured),
+    // use a placeholder URL so the PrismaClient constructor doesn't throw at
+    // module import time. isDbAvailable() will return false and agents will
+    // gracefully skip all DB operations.
+    datasourceUrl: process.env.DATABASE_URL ?? "postgresql://placeholder:placeholder@localhost:5432/placeholder",
     log:
       process.env.NODE_ENV === "development"
         ? ["query", "error", "warn"]

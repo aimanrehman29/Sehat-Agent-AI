@@ -13,7 +13,7 @@ const envSchema = z.object({
   NEXT_PUBLIC_APP_URL: z.string().url().default("http://localhost:3000"),
 
   // Database
-  DATABASE_URL: z.string().url(),
+  DATABASE_URL: z.string().url().optional(),
 
   // OCR Provider
   OCR_PROVIDER: z.enum(["tesseract", "google_vision"]).default("tesseract"),
