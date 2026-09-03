@@ -45,8 +45,17 @@ export async function handleTriageChain(
   _province: string | undefined,
   startTime: number
 ): Promise<NextResponse> {
+  console.log(`[TriageChain] Input`, { requestId, text });
+
   // ── Step 1: Run Triage ──
   const triageResult = await executeTriage(text, requestId);
+
+  console.log(`[TriageChain] Triage result`, {
+    requestId,
+    department: triageResult.department,
+    urgency: triageResult.urgency,
+    keywords_detected: triageResult.keywords_detected,
+  });
 
   updateSession(sessionId, {
     last_triage_department: triageResult.department,
@@ -60,6 +69,7 @@ export async function handleTriageChain(
   // ── Step 2a: No location yet — return Triage result alone ──
   // The UI should prompt for location, then call again on the next turn.
   if (latitude == null || longitude == null) {
+    console.log(`[TriageChain] No location — skipping GeoLocator`, { requestId });
     return NextResponse.json(
       applyGuardrails({
         request_id: requestId,
@@ -74,6 +84,9 @@ export async function handleTriageChain(
 
   // ── Step 2b: Location available — chain into GeoLocator ──
   // Uses Triage's own department + ranking preference so the user isn't asked twice.
+  console.log(`[TriageChain] Location available — chaining into GeoLocator`, {
+    requestId, latitude, longitude, department: triageResult.department,
+  });
   const geoResult = await executeGeoLocate(
     latitude,
     longitude,

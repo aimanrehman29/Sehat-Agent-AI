@@ -62,6 +62,7 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
     longitude: number;
   } | null>(null);
   const [showMic, setShowMic] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const Icon = agent.icon;
@@ -136,6 +137,17 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
     }
   }
 
+  // ── Geolocation error — shared by requestLocation and the auto-fire effect ──
+  function handleLocationError(err: GeolocationPositionError) {
+    console.log(`[Location] getCurrentPosition failed`, { code: err.code, message: err.message });
+    setCoords(null);
+    setLocationError(
+      err.code === err.PERMISSION_DENIED
+        ? "Location access is blocked. Check your browser's site settings and allow location, then try again."
+        : "Couldn't get your location. Please try again."
+    );
+  }
+
   // ── Geolocation request — routed through consent layer ──
   function requestLocation() {
     if (!locationConsent.granted) {
@@ -144,12 +156,14 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
     }
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
-      (pos) =>
+      (pos) => {
         setCoords({
           latitude: pos.coords.latitude,
           longitude: pos.coords.longitude,
-        }),
-      () => setCoords(null)
+        });
+        setLocationError(null);
+      },
+      handleLocationError
     );
   }
 
@@ -157,12 +171,14 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
   useEffect(() => {
     if (locationConsent.granted && !coords) {
       navigator.geolocation?.getCurrentPosition(
-        (pos) =>
+        (pos) => {
           setCoords({
             latitude: pos.coords.latitude,
             longitude: pos.coords.longitude,
-          }),
-        () => setCoords(null)
+          });
+          setLocationError(null);
+        },
+        handleLocationError
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -207,6 +223,9 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
           >
             {t.shareLocation}
           </button>
+        )}
+        {locationError && (
+          <p className="text-xs text-red-600 mt-1">{locationError}</p>
         )}
       </header>
 

@@ -64,6 +64,9 @@ const EMERGENCY_TOKEN_GROUPS: Array<{ canonical: string; tokens: string[][] }> =
   { canonical: "cardiac arrest", tokens: [
     ["cardiac", "arrest"],
   ]},
+  { canonical: "explicit emergency request", tokens: [
+    ["emergency"],
+  ]},
 ];
 
 /**

@@ -29,6 +29,8 @@ import {
 } from "@/agents/track-b/emergencyEscalation";
 import { generateFallbackResponse } from "@/lib/orchestrator/fallbackAssistant";
 import { handleTriageChain } from "@/lib/orchestrator/triageChain";
+import { executeGeoLocate } from "@/agents/track-b/geoLocator";
+import { detectLocationPreference } from "@/agents/track-b/triage";
 import {
   applyGuardrails,
   applyErrorGuardrail,
@@ -59,10 +61,12 @@ export async function POST(req: NextRequest) {
     }
 
     const session = getOrCreateSession(session_id);
+    console.log(`[Orchestrator] Incoming`, { requestId, text, agent_hint });
     appendHistory(session_id, "user", text);
 
     // ── PRIORITY 1: Emergency check — always runs first, never skipped ──
     if (detectEmergency(text)) {
+      console.log(`[Orchestrator] Emergency detected`, { requestId, text });
       const emergencyResult = await executeEmergencyCheck(
         text,
         requestId,
@@ -105,10 +109,11 @@ export async function POST(req: NextRequest) {
       if (hinted) intent = hinted;
     }
 
+    console.log(`[Orchestrator] Routing decision`, { requestId, classifiedIntent: classifyIntent(text), agentHint: agent_hint, finalIntent: intent });
+
     switch (intent) {
       case "symptom_triage":
-      case "hospital_search": {
-        // Chained flow — Triage → GeoLocator handoff (Section D).
+        // Symptom-based routing — always chains through Triage → GeoLocator.
         return await handleTriageChain(
           text,
           requestId,
@@ -118,6 +123,47 @@ export async function POST(req: NextRequest) {
           province,
           startTime
         );
+
+      case "hospital_search": {
+        if (agent_hint === "geo-locator") {
+          console.log(`[Orchestrator] agent_hint=geo-locator — bypassing Triage`, { requestId, text });
+
+          if (latitude == null || longitude == null) {
+            return NextResponse.json(
+              applyErrorGuardrail({
+                request_id: requestId,
+                agent_source: "geo-locator",
+                error_code: "LOCATION_REQUIRED",
+                error_message: "Please share your location to find nearby hospitals.",
+                processing_time_ms: Date.now() - startTime,
+              }),
+              { status: 400 }
+            );
+          }
+
+          const rankingStrategy = detectLocationPreference(text);
+          const geoResult = await executeGeoLocate(latitude, longitude, "hospital", requestId, rankingStrategy);
+          updateSession(session_id, { last_agent_used: "geo-locator" });
+
+          console.log(`[Orchestrator] GeoLocator direct result`, {
+            requestId, rankingStrategy, facilitiesFound: geoResult.facilities?.length ?? 0,
+          });
+
+          return NextResponse.json(
+            applyGuardrails({
+              request_id: requestId,
+              agent_source: "geo-locator",
+              status: "success",
+              result: geoResult,
+              confidence_score: geoResult.confidence,
+              processing_time_ms: Date.now() - startTime,
+            })
+          );
+        }
+
+        // Free-text hospital_search (no tile tap) still chains through Triage,
+        // since the user may have typed an actual symptom.
+        return await handleTriageChain(text, requestId, session_id, latitude, longitude, province, startTime);
       }
 
       case "doctor_lookup":
