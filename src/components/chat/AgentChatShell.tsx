@@ -31,6 +31,8 @@ import type { VoiceRecording } from "@/lib/voice/recorder";
 import ChatFileUpload from "./ChatFileUpload";
 import ResultRenderer from "@/components/results/ResultRenderer";
 import type { AgentConfig } from "@/lib/agents/agentConfig";
+import { useLanguage } from "@/lib/i18n/LanguageContext";
+import { UI_STRINGS } from "@/lib/i18n/translations";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -46,7 +48,10 @@ interface Turn {
 
 export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
   const router = useRouter();
+  const { lang } = useLanguage();
+  const t = UI_STRINGS[lang];
   const micConsent = useConsentGate("microphone");
+  const locationConsent = useConsentGate("location");
 
   const [sessionId] = useState(() => uuidv4());
   const [inputText, setInputText] = useState("");
@@ -131,8 +136,12 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
     }
   }
 
-  // ── Geolocation request ──
+  // ── Geolocation request — routed through consent layer ──
   function requestLocation() {
+    if (!locationConsent.granted) {
+      locationConsent.requestAccess();
+      return;
+    }
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
       (pos) =>
@@ -143,6 +152,21 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
       () => setCoords(null)
     );
   }
+
+  // ── Auto-fire geolocation once consent is granted ──
+  useEffect(() => {
+    if (locationConsent.granted && !coords) {
+      navigator.geolocation?.getCurrentPosition(
+        (pos) =>
+          setCoords({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          }),
+        () => setCoords(null)
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locationConsent.granted]);
 
   // ── Voice recording handler ──
   function handleRecordingReady(recording: VoiceRecording) {
@@ -176,12 +200,12 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
         <h1 className="text-base font-semibold text-brand-forest flex-1">
           {agent.name}
         </h1>
-        {agent.id === "orchestrator" && !coords && (
+        {agent.endpointMode === "orchestrator" && !coords && (
           <button
             onClick={requestLocation}
             className="text-xs font-medium text-brand-kelly min-h-[44px] px-2"
           >
-            Share location
+            {t.shareLocation}
           </button>
         )}
       </header>
@@ -189,9 +213,32 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
       {/* ── Scrollable conversation area ── */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
         {turns.length === 0 && (
-          <p className="text-sm text-brand-g40 text-center mt-8">
-            {agent.tagline}
-          </p>
+          <div className="flex flex-col items-center justify-center mt-10 gap-4 px-4">
+            <Icon size={72} color="#CAF0C1" strokeWidth={1.5} />
+            <p
+              className="text-sm text-brand-g40 text-center"
+              dir={lang === "ur" ? "rtl" : "ltr"}
+            >
+              {lang === "ur" && agent.taglineUr ? agent.taglineUr : agent.tagline}
+            </p>
+            {agent.examplePrompts && agent.examplePrompts.length > 0 && (
+              <div className="flex flex-wrap gap-2 justify-center">
+                {(lang === "ur" && agent.examplePromptsUr ? agent.examplePromptsUr : agent.examplePrompts).map(
+                  (prompt, i) => (
+                    <button
+                      key={i}
+                      onClick={() => handleSend(prompt)}
+                      dir={lang === "ur" ? "rtl" : "ltr"}
+                      className="px-3 py-1.5 rounded-full text-xs font-medium border transition-colors"
+                      style={{ borderColor: "#015D67", color: "#015D67" }}
+                    >
+                      {prompt}
+                    </button>
+                  )
+                )}
+              </div>
+            )}
+          </div>
         )}
         {turns.map((turn, i) =>
           turn.type === "user" ? (
@@ -207,8 +254,14 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
               </div>
             </div>
           ) : (
-            <div key={i} className="flex justify-start">
-              <div className="max-w-[90%]">
+            <div key={i} className="flex items-start gap-2">
+              <span
+                className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
+                style={{ backgroundColor: "#CAF0C1" }}
+              >
+                <Icon size={16} color="#015D67" />
+              </span>
+              <div className="max-w-[85%]">
                 <ResultRenderer response={turn.response} />
               </div>
             </div>
@@ -216,9 +269,11 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
         )}
         {isLoading && (
           <div className="flex justify-start">
-            <p className="text-xs text-brand-mint font-medium animate-pulse">
-              Thinking...
-            </p>
+            <div className="bg-white border border-brand-g16 rounded-2xl rounded-bl-sm px-4 py-3 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full animate-bounce inline-block" style={{ backgroundColor: "#015D67", animationDelay: "0ms" }} />
+              <span className="w-2 h-2 rounded-full animate-bounce inline-block" style={{ backgroundColor: "#015D67", animationDelay: "150ms" }} />
+              <span className="w-2 h-2 rounded-full animate-bounce inline-block" style={{ backgroundColor: "#015D67", animationDelay: "300ms" }} />
+            </div>
           </div>
         )}
       </div>
@@ -243,6 +298,14 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
         onDecline={micConsent.onDecline}
       />
 
+      {/* Location consent modal */}
+      <ConsentModal
+        feature="location"
+        open={locationConsent.modalOpen}
+        onAccept={locationConsent.onAccept}
+        onDecline={locationConsent.onDecline}
+      />
+
       {/* ── Sticky bottom input bar ── */}
       <div
         className="flex-none bg-white border-t border-brand-g16 px-3 pt-2 flex items-center gap-2"
@@ -257,8 +320,9 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSend(inputText)}
-          placeholder={agent.placeholder}
-          className="flex-1 border border-brand-g24 rounded-full px-4 min-h-[44px] text-sm"
+          placeholder={lang === "ur" && agent.placeholderUr ? agent.placeholderUr : agent.placeholder}
+          dir={lang === "ur" ? "rtl" : "ltr"}
+          className="flex-1 min-w-0 border border-brand-g24 rounded-full px-4 min-h-[44px] text-sm"
         />
         {/* Mic toggle button */}
         <button

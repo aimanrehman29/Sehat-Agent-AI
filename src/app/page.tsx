@@ -13,15 +13,29 @@
 
 "use client";
 
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { AGENTS, ORCHESTRATOR_AGENT } from "@/lib/agents/agentConfig";
+import SplashScreen from "@/components/SplashScreen";
+import { useLanguage } from "@/lib/i18n/LanguageContext";
+import { UI_STRINGS } from "@/lib/i18n/translations";
 
 export default function HubPage() {
   const router = useRouter();
+  const { lang, toggleLang } = useLanguage();
+  const t = UI_STRINGS[lang];
+  const [showSplash, setShowSplash] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setShowSplash(false), 1400);
+    return () => clearTimeout(timer);
+  }, []);
 
   return (
-    <div className="flex flex-col h-[100dvh] bg-brand-g2">
+    <>
+      {showSplash && <SplashScreen />}
+      <div className="flex flex-col h-[100dvh] bg-brand-g2">
       {/* ── Header — logo + name, safe-area for the notch ── */}
       <header
         className="flex-none bg-white border-b px-4 pb-4 flex items-center gap-2"
@@ -38,14 +52,25 @@ export default function HubPage() {
           <h1 className="text-lg font-semibold text-brand-forest">
             Sehat-Assist AI
           </h1>
-          <p className="text-xs text-brand-g56">Your health, one tap away</p>
+          <p className="text-xs text-brand-g56" dir={lang === "ur" ? "rtl" : "ltr"}>
+            {t.tagline}
+          </p>
         </div>
+        <button
+          onClick={toggleLang}
+          className="ml-auto text-xs font-semibold text-[#015D67] border border-[#015D67] rounded-full px-3 py-1.5 min-h-[32px]"
+        >
+          {lang === "en" ? "\u0627\u0631\u062f\u0648" : "EN"}
+        </button>
       </header>
 
       {/* ── Scrollable agent grid — the only part that scrolls ── */}
       <div className="flex-1 overflow-y-auto px-4 py-5">
-        <p className="text-xs font-medium text-brand-g56 uppercase tracking-wide mb-3">
-          Choose an assistant
+        <p
+          className="text-xs font-medium text-brand-g56 uppercase tracking-wide mb-3"
+          dir={lang === "ur" ? "rtl" : "ltr"}
+        >
+          {t.chooseAssistant}
         </p>
         <div className="grid grid-cols-2 gap-3">
           {AGENTS.map((agent) => {
@@ -54,8 +79,9 @@ export default function HubPage() {
               <button
                 key={agent.id}
                 onClick={() => router.push(`/agent/${agent.id}`)}
-                className="flex flex-col items-start gap-2 bg-white border border-brand-g16 rounded-2xl p-4 min-h-[44px] text-left
+                className="flex flex-col items-start gap-2 rounded-2xl p-4 min-h-[44px] text-left
                            shadow-sm active:scale-[0.98] transition-transform"
+                style={{ backgroundColor: "#015D67" }}
               >
                 <span
                   className="w-10 h-10 rounded-xl flex items-center justify-center"
@@ -63,11 +89,11 @@ export default function HubPage() {
                 >
                   <Icon size={20} color="#015D67" />
                 </span>
-                <span className="text-sm font-semibold text-gray-900">
-                  {agent.name}
+                <span className="text-sm font-semibold text-white" dir={lang === "ur" ? "rtl" : "ltr"}>
+                  {lang === "ur" && agent.nameUr ? agent.nameUr : agent.name}
                 </span>
-                <span className="text-xs text-brand-g56 leading-snug">
-                  {agent.tagline}
+                <span className="text-xs text-white/80 leading-snug" dir={lang === "ur" ? "rtl" : "ltr"}>
+                  {lang === "ur" && agent.taglineUr ? agent.taglineUr : agent.tagline}
                 </span>
               </button>
             );
@@ -87,9 +113,10 @@ export default function HubPage() {
           style={{ backgroundColor: "#00ACB1" }}
         >
           <ORCHESTRATOR_AGENT.icon size={18} />
-          Talk to Sehat-Assist
+          {t.talkToAssistant}
         </button>
       </div>
-    </div>
+      </div>
+    </>
   );
 }

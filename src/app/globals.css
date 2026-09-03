@@ -26,7 +26,20 @@
   --brand-g2: #fafcfc;
 }
 
+html, body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body {
   color: rgb(var(--foreground-rgb));
   background: var(--brand-g2);
+}
+
+/* Splash screen fade-out animation */
+@keyframes fadeOut {
+  0%   { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { opacity: 0; pointer-events: none; }
 }
