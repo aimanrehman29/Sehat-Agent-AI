@@ -1,6 +1,6 @@
 /**
  * ─────────────────────────────────────────────────────────────────────────────
- * fallbackAssistant.ts — LLM-based fallback for unmatched intents.
+ * fallbackAssistant.ts — Gemini-powered fallback for unmatched intents.
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * This is the "RAG-bot decision, implemented" — but it is NOT true RAG.
@@ -10,11 +10,13 @@
  *   (b) gracefully declines anything outside scope, with a fixed list of
  *       what the app can actually do.
  *
- * Reuses the `openai` package already installed for Track A's chat handler.
- * Degrades gracefully to a static response if OPENAI_API_KEY is missing.
+ * Uses the same GEMINI_API_KEY and the same @google/genai SDK pattern already
+ * working in doctorLookup.ts. Degrades gracefully to a static response if
+ * GEMINI_API_KEY is missing or the call fails.
  */
 
-import OpenAI from "openai";
+import { GoogleGenAI } from "@google/genai";
+import { logger } from "@/lib/logger";
 
 // ─── Result Interface ───────────────────────────────────────────────────────
 
@@ -23,8 +25,8 @@ export interface FallbackResult {
   summary_text: string;
   /** List of capabilities the user can try */
   suggested_capabilities: string[];
-  /** Whether the response came from the LLM or the static fallback */
-  source: "llm_fallback" | "static_fallback";
+  /** Whether the response came from Gemini or the static fallback */
+  source: "gemini_fallback" | "static_fallback";
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -44,26 +46,37 @@ const APP_CAPABILITIES = [
 ];
 
 /**
- * Static fallback message — shown when OPENAI_API_KEY is missing or the
- * LLM call fails. Lists the app's actual capabilities honestly.
+ * Static fallback message — shown when GEMINI_API_KEY is missing or the
+ * Gemini call fails. Lists the app's actual capabilities honestly.
  */
 const STATIC_FALLBACK =
-  "I'm not sure how to help with that directly, but here's what I can do:\n" +
-  APP_CAPABILITIES.map((c) => `- ${c}`).join("\n");
+  "Here's what I can help with:\n" + APP_CAPABILITIES.map((c) => `- ${c}`).join("\n");
 
-// ─── OpenAI Client (lazy singleton) ─────────────────────────────────────────
+// ─── Gemini Client (lazy singleton) ─────────────────────────────────────────
 
-let _client: OpenAI | null = null;
+const FALLBACK_MODEL = "gemini-3.6-flash";
 
-function getClient(): OpenAI | null {
-  if (_client) return _client;
+let _gemini: GoogleGenAI | null = null;
 
-  const apiKey = process.env.OPENAI_API_KEY;
+function getGeminiClient(): GoogleGenAI | null {
+  if (_gemini) return _gemini;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
-
-  _client = new OpenAI({ apiKey });
-  return _client;
+  _gemini = new GoogleGenAI({ apiKey });
+  return _gemini;
 }
+
+// ─── System Prompt ──────────────────────────────────────────────────────────
+
+const SYSTEM_PROMPT =
+  "You are the assistant for Sehat-Assist AI, a Pakistani healthcare navigation app. " +
+  "You do NOT diagnose, prescribe, or give specific medical advice. " +
+  "If the user asks what the app can do, or a general/greeting question, answer directly and " +
+  "warmly in 1-3 short sentences — do NOT say things like 'I'm not sure how to help.' " +
+  "If their message is a medical question outside what the app's specialized agents handle, " +
+  "gently redirect them toward one of the app's real capabilities: " +
+  APP_CAPABILITIES.join("; ") + ". " +
+  "Never invent a diagnosis or medical claim. Keep replies under 3 sentences.";
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
@@ -75,15 +88,16 @@ function getClient(): OpenAI | null {
  *
  * @param text - The user's message
  * @param history - Conversation history for context
- * @returns FallbackResult with either LLM or static content
+ * @returns FallbackResult with either Gemini or static content
  */
 export async function generateFallbackResponse(
   text: string,
   history: { role: "user" | "assistant"; content: string }[]
 ): Promise<FallbackResult> {
-  const client = getClient();
+  const client = getGeminiClient();
 
   if (!client) {
+    logger.warn("[FallbackAssistant] GEMINI_API_KEY not set — using static fallback");
     return {
       summary_text: STATIC_FALLBACK,
       suggested_capabilities: APP_CAPABILITIES,
@@ -92,37 +106,46 @@ export async function generateFallbackResponse(
   }
 
   try {
-    const completion = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL ?? "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are the fallback assistant inside Sehat-Assist AI, a Pakistani healthcare " +
-            "navigation app. You do NOT diagnose, prescribe, or give specific medical advice. " +
-            "If the user's message is a general app question, answer briefly. If it's a medical " +
-            "question outside what the app's specialized agents handle, gently redirect them to " +
-            "one of the app's actual capabilities: " +
-            APP_CAPABILITIES.join("; ") +
-            ". " +
-            "Keep responses under 3 sentences.",
-        },
-        // Last 6 messages for context — enough for continuity, not too much for cost.
-        ...history.slice(-6).map((h) => ({ role: h.role, content: h.content })),
-        { role: "user", content: text },
-      ],
-      max_tokens: 200,
+    const recentHistory = history
+      .slice(-6)
+      .map((h) => `${h.role === "user" ? "User" : "Assistant"}: ${h.content}`)
+      .join("\n");
+
+    const prompt = `${SYSTEM_PROMPT}\n\n${recentHistory ? recentHistory + "\n" : ""}User: ${text}`;
+
+    const completion = await client.models.generateContent({
+      model: FALLBACK_MODEL,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: {
+        temperature: 0.4,
+        // Thinking tokens count toward maxOutputTokens — a low cap truncates
+        // the reply mid-sentence.
+        maxOutputTokens: 1000,
+      },
     });
 
-    const reply = completion.choices[0]?.message?.content?.trim();
+    const reply = (completion.text ?? "").trim();
 
-    return {
-      summary_text: reply && reply.length > 0 ? reply : STATIC_FALLBACK,
-      suggested_capabilities: APP_CAPABILITIES,
-      source: reply ? "llm_fallback" : "static_fallback",
-    };
-  } catch {
-    // Never throw from the fallback path — worst case, degrade to the static list.
+    logger.info("[FallbackAssistant] Gemini reply generated", {
+      replyChars: reply.length,
+    });
+
+    return reply.length > 0
+      ? {
+          summary_text: reply,
+          suggested_capabilities: APP_CAPABILITIES,
+          source: "gemini_fallback",
+        }
+      : {
+          summary_text: STATIC_FALLBACK,
+          suggested_capabilities: APP_CAPABILITIES,
+          source: "static_fallback",
+        };
+  } catch (error) {
+    console.error("[FallbackAssistant] Gemini call failed:", error);
+    logger.warn("[FallbackAssistant] Gemini call failed — using static fallback", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return {
       summary_text: STATIC_FALLBACK,
       suggested_capabilities: APP_CAPABILITIES,

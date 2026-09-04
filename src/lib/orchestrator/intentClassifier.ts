@@ -21,6 +21,7 @@ export type Intent =
   | "symptom_triage"
   | "hospital_search"
   | "doctor_lookup"
+  | "appointment_booking"
   | "drug_verification"
   | "lab_report"
   | "prescription"
@@ -37,12 +38,17 @@ const INTENT_KEYWORDS: Record<
   string[]
 > = {
   symptom_triage: [
-    "pain", "fever", "sick", "hurts", "symptom",
+    "pain", "ache", "fever", "sick", "hurts", "symptom",
     "dard", "bukhar", "takleef",
+  ],
+  // Booking phrasing is checked BEFORE doctor_lookup so "book an appointment
+  // with doctor X" routes to the booking flow, not a doctor search.
+  appointment_booking: [
+    "book", "appointment", "schedule", "make an appointment", "reserve",
   ],
   doctor_lookup: [
     "doctor", "specialist", "cardiologist", "consultant",
-    "appointment with dr", "dr.", "dr ", "physician", "surgeon",
+    "find a doctor", "which hospital", "where does dr",
   ],
   hospital_search: [
     "hospital", "nearest", "near me", "clinic", "location",

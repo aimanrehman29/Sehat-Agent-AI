@@ -44,7 +44,7 @@ let _gemini: GoogleGenAI | null = null;
 
 function getGeminiClient(): GoogleGenAI | null {
   if (_gemini) return _gemini;
-  const apiKey = process.env.GEMINI_2_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
   _gemini = new GoogleGenAI({ apiKey });
   return _gemini;
@@ -99,7 +99,7 @@ const CLEANUP_PROMPT =
 async function cleanSnippetsWithGemini(rawSnippets: string): Promise<string | null> {
   const client = getGeminiClient();
   if (!client) {
-    logger.warn("[DoctorLookup] GEMINI_2_KEY not set — using local snippet formatting");
+    logger.warn("[DoctorLookup] GEMINI_API_KEY not set — using local snippet formatting");
     return null;
   }
 
@@ -109,7 +109,9 @@ async function cleanSnippetsWithGemini(rawSnippets: string): Promise<string | nu
       contents: [{ role: "user", parts: [{ text: CLEANUP_PROMPT + rawSnippets }] }],
       config: {
         temperature: 0.1,
-        maxOutputTokens: 600,
+        // Generous cap: thinking tokens count toward maxOutputTokens, and a
+        // cleaned 5-doctor list itself needs a few hundred tokens.
+        maxOutputTokens: 2000,
       },
     });
 
@@ -121,6 +123,142 @@ async function cleanSnippetsWithGemini(rawSnippets: string): Promise<string | nu
       error: error instanceof Error ? error.message : String(error),
     });
     return null;
+  }
+}
+
+// ─── Doctor query field extraction (Gemini) ─────────────────────────────────
+
+/** Structured fields pulled out of a free-text doctor-search message. */
+export interface DoctorQueryExtraction {
+  doctorName?: string;
+  department?: string;
+  hospitalName?: string;
+  areaHint?: string;
+  needsClarification: boolean;
+  clarifyingQuestion?: string;
+}
+
+const EXTRACTION_MODEL = "gemini-3.6-flash";
+
+const EXTRACTION_PROMPT = `You extract structured fields from a Pakistani healthcare app user's message about finding a doctor. Given the user's latest message and recent conversation history, extract:
+- doctorName: a specific doctor's name if mentioned, else omit
+- department: a medical specialty if mentioned (e.g. Cardiology, Orthopedics), else omit
+- hospitalName: a specific hospital/clinic name if mentioned, else omit
+- areaHint: a city or area in Pakistan if mentioned anywhere in the message OR recent history, else omit
+A search needs AT MINIMUM an areaHint to be useful, AND at least one of doctorName/department.
+If areaHint is missing, or BOTH doctorName and department are missing, set needsClarification: true and write a short, friendly clarifyingQuestion asking for exactly what's missing.
+Otherwise set needsClarification: false and omit clarifyingQuestion.
+Reply with ONLY valid JSON, no other text:
+{"doctorName": "...", "department": "...", "hospitalName": "...", "areaHint": "...", "needsClarification": false, "clarifyingQuestion": "..."}
+Omit any field that doesn't apply.`;
+
+/** Read a string field off a loosely-parsed object; empty strings become undefined. */
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+/**
+ * Recover a JSON object from a Gemini reply. Even at temperature 0 Gemini
+ * sometimes wraps the object in markdown fences or prose, or emits bare
+ * (unquoted) keys — all of which make JSON.parse throw. Extract the
+ * outermost {...} block, repair the common malformed shapes, and parse.
+ * Returns null when no object can be recovered.
+ */
+function parseExtractionReply(reply: string): Record<string, unknown> | null {
+  const start = reply.indexOf("{");
+  const end = reply.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return null;
+  const candidate = reply.slice(start, end + 1);
+
+  try {
+    return JSON.parse(candidate) as Record<string, unknown>;
+  } catch {
+    // Repair pass — quote single-quoted and bare keys, quote single-quoted
+    // values, normalize Python-style literals, drop trailing commas.
+    const repaired = candidate
+      .replace(/([{,]\s*)'([^']*?)'(\s*:)/g, '$1"$2"$3')
+      .replace(/(:\s*)'([^']*?)'/g, '$1"$2"')
+      .replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)/g, '$1"$2"$3')
+      .replace(/:\s*True\b/g, ": true")
+      .replace(/:\s*False\b/g, ": false")
+      .replace(/:\s*None\b/g, ": null")
+      .replace(/,(\s*[}\]])/g, "$1");
+    try {
+      return JSON.parse(repaired) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+}
+
+/**
+ * Extract doctorName/department/hospitalName/areaHint from a free-text
+ * message plus recent conversation history, using Gemini. Replaces the old
+ * behavior of passing the ENTIRE raw sentence as the department.
+ *
+ * Returns needsClarification with a friendly question when there isn't
+ * enough to search accurately — never guesses. When Gemini is unavailable
+ * or returns unusable output, falls back to asking for doctor/specialty
+ * and city so the user is never shown a garbage search.
+ */
+export async function extractDoctorQueryFields(
+  text: string,
+  recentHistory: { role: string; content: string }[]
+): Promise<DoctorQueryExtraction> {
+  const client = getGeminiClient();
+  if (!client) {
+    return {
+      needsClarification: true,
+      clarifyingQuestion:
+        "Which doctor or specialty are you looking for, and in which city?",
+    };
+  }
+
+  try {
+    const historyText = recentHistory
+      .map((h) => `${h.role}: ${h.content}`)
+      .join("\n");
+    const prompt = `${EXTRACTION_PROMPT}\n\nRecent conversation:\n${historyText}\n\nLatest message: ${text}`;
+
+    const completion = await client.models.generateContent({
+      model: EXTRACTION_MODEL,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: {
+        temperature: 0,
+        // Thinking tokens count toward maxOutputTokens — a 200-token cap was
+        // almost entirely consumed by thinking, truncating the JSON mid-object.
+        maxOutputTokens: 2000,
+      },
+    });
+
+    const raw = (completion.text ?? "").trim();
+    const parsed = parseExtractionReply(raw);
+    if (!parsed) {
+      logger.warn(
+        "[DoctorLookup] Extraction reply was not parseable JSON — asking for clarification",
+        { replyPreview: raw.slice(0, 200) }
+      );
+      return {
+        needsClarification: true,
+        clarifyingQuestion:
+          "Which doctor or specialty are you looking for, and in which city?",
+      };
+    }
+    return {
+      doctorName: asString(parsed.doctorName),
+      department: asString(parsed.department),
+      hospitalName: asString(parsed.hospitalName),
+      areaHint: asString(parsed.areaHint),
+      needsClarification: parsed.needsClarification === true,
+      clarifyingQuestion: asString(parsed.clarifyingQuestion),
+    };
+  } catch (error) {
+    console.error("[DoctorLookup] Extraction failed:", error);
+    return {
+      needsClarification: true,
+      clarifyingQuestion:
+        "Which doctor or specialty are you looking for, and in which city?",
+    };
   }
 }
 

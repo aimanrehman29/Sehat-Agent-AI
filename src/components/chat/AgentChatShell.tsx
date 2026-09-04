@@ -21,7 +21,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import { useConsentGate } from "@/lib/consent/useConsentGate";
@@ -85,6 +85,23 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
     });
   }, [turns, isLoading]);
 
+  // ── Prefill auto-send (navigated here from the Orchestrator with ?prefill=) ──
+  // The ref guard makes the send idempotent — React StrictMode mounts effects
+  // twice in development, which would otherwise send the message twice.
+  const searchParams = useSearchParams();
+  const prefillSentRef = useRef(false);
+
+  useEffect(() => {
+    const prefill = searchParams.get("prefill");
+    if (prefill && !prefillSentRef.current) {
+      prefillSentRef.current = true;
+      handleSend(prefill);
+      // Clear the query param so refreshing the page doesn't re-send it.
+      router.replace(`/agent/${agent.id}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Send message ──
   async function handleSend(
     text: string,
@@ -130,6 +147,33 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
         body: JSON.stringify(body),
       });
       const data = await res.json();
+
+      // Orchestrator navigation instruction — show a brief transitional
+      // bubble, then route to the target agent's screen with the original
+      // message carried over as ?prefill (auto-sent on arrival below).
+      if (data?.result?.action === "navigate" && data.result.target_agent_id) {
+        setTurns((t) => [
+          ...t,
+          {
+            type: "response",
+            response: {
+              status: "success",
+              agent_source: "orchestrator",
+              result: { summary_text: "Taking you there..." },
+            },
+          },
+        ]);
+        setIsLoading(false);
+        setTimeout(() => {
+          router.push(
+            `/agent/${data.result.target_agent_id}?prefill=${encodeURIComponent(
+              data.result.carry_text
+            )}`
+          );
+        }, 500);
+        return;
+      }
+
       setTurns((t) => [...t, { type: "response", response: data }]);
     } catch {
       setTurns((t) => [

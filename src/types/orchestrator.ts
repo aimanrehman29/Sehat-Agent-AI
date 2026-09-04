@@ -105,6 +105,17 @@ export interface GuardrailPayload {
 }
 
 /**
+ * Loose result shape for orchestrator-authored text replies that don't come
+ * from a specific agent — boundary messages, navigation instructions, and
+ * status notices. Requires only summary_text; extra fields (action,
+ * target_agent_id, carry_text, source, …) are allowed.
+ */
+export interface OrchestratorTextResult {
+  summary_text: string;
+  [key: string]: unknown;
+}
+
+/**
  * Generic agent result payload — each agent extends this with specifics.
  */
 export type AgentResultPayload =
@@ -118,7 +129,8 @@ export type AgentResultPayload =
   | VoiceTranscriptionResult
   | ChatReplyResult
   | DoctorLookupResult
-  | FallbackResult;
+  | FallbackResult
+  | OrchestratorTextResult;
 
 // ─── Voice Transcription Result ─────────────────────────────────────────────
 

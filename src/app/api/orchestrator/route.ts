@@ -28,6 +28,11 @@ import {
   executeEmergencyCheck,
 } from "@/agents/track-b/emergencyEscalation";
 import { generateFallbackResponse } from "@/lib/orchestrator/fallbackAssistant";
+import { extractDoctorQueryFields } from "@/agents/track-b/doctorLookup";
+import {
+  isDiagnosticRequest,
+  DIAGNOSTIC_BOUNDARY_MESSAGE,
+} from "@/lib/orchestrator/diagnosticRequestDetector";
 import { handleTriageChain } from "@/lib/orchestrator/triageChain";
 import { executeGeoLocate } from "@/agents/track-b/geoLocator";
 import { detectLocationPreference } from "@/agents/track-b/triage";
@@ -38,6 +43,19 @@ import {
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 15;
+
+// Map of routable intents to their hub tile IDs (frontend navigation targets).
+// doctor_lookup and appointment_booking are NOT in this map — both now
+// resolve with their own answer directly in place (Section H), since
+// there's no dedicated doctor-lookup screen and the booking message is
+// identical regardless of which screen it's shown on.
+const INTENT_TO_AGENT_SCREEN: Record<string, string> = {
+  symptom_triage: "triage",
+  hospital_search: "geo-locator",
+  drug_verification: "pharma-check",
+  lab_report: "lingo-med",
+  prescription: "care-sync",
+};
 
 // ─── Main Handler ───────────────────────────────────────────────────────────
 
@@ -90,6 +108,27 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ── PRIORITY 1.5: Diagnostic-request boundary — checked before normal routing ──
+    // Explicit diagnosis-seeking gets the assist-not-diagnose boundary message
+    // in place, no navigation. Deliberately AFTER emergency detection.
+    if (isDiagnosticRequest(text)) {
+      console.log(`[Orchestrator] Diagnostic request detected`, { requestId, text });
+      updateSession(session_id, { last_agent_used: "orchestrator" });
+      return NextResponse.json(
+        applyGuardrails({
+          request_id: requestId,
+          agent_source: "orchestrator",
+          status: "success",
+          result: {
+            summary_text: DIAGNOSTIC_BOUNDARY_MESSAGE,
+            source: "diagnostic_boundary",
+          },
+          confidence_score: 1,
+          processing_time_ms: Date.now() - startTime,
+        })
+      );
+    }
+
     // ── PRIORITY 2: Classify intent and route ──
     let intent: Intent = classifyIntent(text);
 
@@ -101,7 +140,7 @@ export async function POST(req: NextRequest) {
       const HINTED_INTENTS: Record<string, Intent> = {
         triage: "symptom_triage",
         "geo-locator": "hospital_search",
-        "auto-booking": "doctor_lookup",
+        "auto-booking": "appointment_booking",
         // Track A direct agents normally hit their own endpoints, but map
         // their hints too in case a client routes them through here.
         "pharma-check": "drug_verification",
@@ -113,6 +152,33 @@ export async function POST(req: NextRequest) {
     }
 
     console.log(`[Orchestrator] Routing decision`, { requestId, classifiedIntent: classifyIntent(text), agentHint: agent_hint, finalIntent: intent });
+
+    // Own-screen navigation: when the user is on the Orchestrator's own
+    // free-text screen (no specific tile hint) and the intent maps to a real
+    // agent screen, return a navigation instruction instead of processing
+    // in place. A specific tile's agent_hint (user already on the right
+    // screen) keeps the current in-place behavior below.
+    const isOwnScreen = !agent_hint || agent_hint === "orchestrator";
+    const navigationTarget = INTENT_TO_AGENT_SCREEN[intent];
+    if (isOwnScreen && navigationTarget) {
+      console.log(`[Orchestrator] Navigating to agent screen`, { requestId, intent, navigationTarget });
+      updateSession(session_id, { last_agent_used: "orchestrator" });
+      return NextResponse.json(
+        applyGuardrails({
+          request_id: requestId,
+          agent_source: "orchestrator",
+          status: "success",
+          result: {
+            action: "navigate",
+            target_agent_id: navigationTarget,
+            carry_text: text,
+            summary_text: "Let me take you there...",
+          },
+          confidence_score: 0.8,
+          processing_time_ms: Date.now() - startTime,
+        })
+      );
+    }
 
     switch (intent) {
       case "symptom_triage":
@@ -169,35 +235,63 @@ export async function POST(req: NextRequest) {
         return await handleTriageChain(text, requestId, session_id, latitude, longitude, province, startTime);
       }
 
+      case "appointment_booking": {
+        console.log(`[Orchestrator] Appointment booking requested — not live yet`, { requestId, text });
+        updateSession(session_id, { last_agent_used: "auto-booking" });
+        return NextResponse.json(
+          applyGuardrails({
+            request_id: requestId,
+            agent_source: "auto-booking",
+            status: "success",
+            result: {
+              summary_text:
+                "Appointment booking is currently under active development and testing. " +
+                "For now, you can look up a doctor's hospital and timings, or find the " +
+                "nearest open hospital and contact them directly.",
+            },
+            confidence_score: 1,
+            processing_time_ms: Date.now() - startTime,
+          })
+        );
+      }
+
       case "doctor_lookup": {
-        console.log(`[Orchestrator] Routing to Doctor Lookup API`, { requestId, text });
-        
+        console.log(`[Orchestrator] Doctor lookup requested`, { requestId, text });
+        const recentHistory = session.conversation_history.slice(-6);
+        const extraction = await extractDoctorQueryFields(text, recentHistory);
+        console.log(`[Orchestrator] Doctor lookup extraction`, { requestId, extraction });
+        if (extraction.needsClarification) {
+          updateSession(session_id, { last_agent_used: "doctor-lookup" });
+          return NextResponse.json(
+            applyGuardrails({
+              request_id: requestId,
+              agent_source: "doctor-lookup",
+              status: "success",
+              result: {
+                summary_text:
+                  extraction.clarifyingQuestion ??
+                  "Which doctor or specialty are you looking for, and in which city?",
+              },
+              confidence_score: 0.3,
+              processing_time_ms: Date.now() - startTime,
+            })
+          );
+        }
         try {
-          // Get the base URL to make an internal server-to-server call
           const baseUrl = process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin;
-          
-          // Hit the already-built Doctor Lookup endpoint
           const doctorRes = await fetch(`${baseUrl}/api/track-b/locate/doctors`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ 
-              text: text, 
-              province: province, 
-              session_id: session_id, 
-              latitude: latitude, 
-              longitude: longitude,
-              // API ki requirement poori karne ke liye parameters inject kar diye:
-              department: text, 
-              areaHint: province || "Pakistan" 
-            })
+            body: JSON.stringify({
+              department: extraction.department,
+              doctorName: extraction.doctorName,
+              hospitalName: extraction.hospitalName,
+              areaHint: extraction.areaHint,
+            }),
           });
-          
           const doctorData = await doctorRes.json();
           updateSession(session_id, { last_agent_used: "doctor-lookup" });
-          
-          // Return the actual agent's response back to the UI
           return NextResponse.json(doctorData, { status: doctorRes.status });
-          
         } catch (error) {
           return NextResponse.json(
             applyErrorGuardrail({
