@@ -12,6 +12,7 @@ import {
   Pill,
   Stethoscope,
   MapPin,
+  UserRound,
   CalendarCheck,
   Sparkles,
 } from "lucide-react";
@@ -128,6 +129,21 @@ export const AGENTS: AgentConfig[] = [
     examplePromptsUr: ["\u0642\u0631\u06cc\u0628\u06cc \u06c1\u0633\u067e\u062a\u0627\u0644 \u0628\u062a\u0627\u0626\u06cc\u06ba", "\u062f\u0644 \u06a9\u06d2 \u0645\u0627\u06c1\u0631 \u06a9\u06d2 \u0633\u0627\u062a\u06be \u0642\u0631\u06cc\u0628\u06cc \u06c1\u0633\u067e\u062a\u0627\u0644"],
   },
   {
+    id: "doctor-lookup",
+    name: "Find a Doctor",
+    nameUr: "\u0688\u0627\u06a9\u0679\u0631 \u062a\u0644\u0627\u0634 \u06a9\u0631\u06cc\u06ba",
+    tagline: "Search doctors by specialty & city",
+    taglineUr: "\u062a\u062e\u0635\u0635 \u0627\u0648\u0631 \u0634\u06c1\u0631 \u06a9\u06d2 \u0645\u0637\u0627\u0628\u0642 \u0688\u0627\u06a9\u0679\u0631 \u062a\u0644\u0627\u0634 \u06a9\u0631\u06cc\u06ba",
+    icon: UserRound,
+    accent: "#015D67",
+    endpointMode: "orchestrator",
+    acceptsUpload: false,
+    placeholder: "e.g. best cardiologist in Lahore",
+    placeholderUr: "\u0645\u062b\u0627\u0644\u0627\u064b \u0644\u0627\u06c1\u0648\u0631 \u0645\u06cc\u06ba \u0628\u06c1\u062a\u0631\u06cc\u0646 \u062f\u0644 \u06a9\u06d2 \u0645\u0627\u06c1\u0631",
+    examplePrompts: ["Find a cardiologist in Lahore", "Best pediatrician near me"],
+    examplePromptsUr: ["\u0644\u0627\u06c1\u0648\u0631 \u0645\u06cc\u06ba \u062f\u0644 \u06a9\u06d2 \u0645\u0627\u06c1\u0631 \u06a9\u0648 \u062a\u0644\u0627\u0634 \u06a9\u0631\u06cc\u06ba", "\u0645\u06cc\u0631\u06d2 \u0642\u0631\u06cc\u0628 \u0628\u06c1\u062a\u0631\u06cc\u0646 \u0627\u0648\u0631\u0627\u0648\u06ba \u06a9\u06d2 \u0645\u0627\u06c1\u0631"],
+  },
+  {
     id: "auto-booking",
     name: "Book an Appointment",
     nameUr: "\u0627\u06cc\u067e\u0627\u0626\u0646\u0679\u0645\u06cc\u0646\u0679 \u06a9\u0631\u0627\u0626\u06cc\u06ba",
@@ -146,7 +162,7 @@ export const AGENTS: AgentConfig[] = [
 
 export const ORCHESTRATOR_AGENT: AgentConfig = {
   id: "orchestrator",
-  name: "Sehat-Assist AI",
+  name: "Sehat-Agent AI",
   nameUr: "\u0633\u06c1\u062a \u0627\u0633\u0633\u0679 \u0627\u06cc\u0622\u0626\u06cc",
   tagline: "Ask me anything, I'll route it",
   taglineUr: "\u0645\u062c\u06be\u0633\u06d2 \u06a9\u0686\u06be \u0628\u06be\u06cc \u067e\u0648\u0686\u06be\u06cc\u06ba\u060c \u0645\u06cc\u06ba \u0631\u0627\u0633\u062a\u06c1 \u062f\u06a9\u06be\u0627\u0624\u0646\u06af\u0627",

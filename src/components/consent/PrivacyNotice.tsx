@@ -19,7 +19,7 @@ export default function PrivacyNotice({ onDataCleared }: PrivacyNoticeProps) {
         We keep your appointment records (E-Parchi) and your consent
         choices on this device so you can access them again. We do not
         sell or share your health information with any third party. You
-        can clear everything stored by Sehat-Assist AI at any time using
+        can clear everything stored by Sehat-Agent AI at any time using
         the button below.
       </p>
       <button

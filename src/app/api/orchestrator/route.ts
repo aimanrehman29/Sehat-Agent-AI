@@ -1,6 +1,6 @@
 /**
  * ─────────────────────────────────────────────────────────────────────────────
- * POST /api/orchestrator — Single entry point for the Sehat-Assist AI homepage.
+ * POST /api/orchestrator — Single entry point for the Sehat-Agent AI homepage.
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * Priority order is NOT optional:
@@ -45,16 +45,16 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 15;
 
 // Map of routable intents to their hub tile IDs (frontend navigation targets).
-// doctor_lookup and appointment_booking are NOT in this map — both now
-// resolve with their own answer directly in place (Section H), since
-// there's no dedicated doctor-lookup screen and the booking message is
-// identical regardless of which screen it's shown on.
+// appointment_booking is NOT in this map — it resolves with its own answer
+// directly in place, since the booking message is identical regardless of
+// which screen it's shown on.
 const INTENT_TO_AGENT_SCREEN: Record<string, string> = {
   symptom_triage: "triage",
   hospital_search: "geo-locator",
   drug_verification: "pharma-check",
   lab_report: "lingo-med",
   prescription: "care-sync",
+  doctor_lookup: "doctor-lookup",
 };
 
 // ─── Main Handler ───────────────────────────────────────────────────────────
@@ -141,6 +141,7 @@ export async function POST(req: NextRequest) {
         triage: "symptom_triage",
         "geo-locator": "hospital_search",
         "auto-booking": "appointment_booking",
+        "doctor-lookup": "doctor_lookup",
         // Track A direct agents normally hit their own endpoints, but map
         // their hints too in case a client routes them through here.
         "pharma-check": "drug_verification",

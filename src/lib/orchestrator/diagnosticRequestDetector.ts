@@ -50,7 +50,7 @@ export function isDiagnosticRequest(text: string): boolean {
 
 /** Boundary message returned when a diagnostic request is detected. */
 export const DIAGNOSTIC_BOUNDARY_MESSAGE =
-  "Sehat-Assist AI is built to assist, not diagnose. I can't tell you what condition you have. " +
+  "Sehat-Agent AI is built to assist, not diagnose. I can't tell you what condition you have. " +
   "What I can do: match your symptoms to the right hospital department, help you find nearby " +
   "care, or explain a lab report in plain language. For an actual diagnosis, please see a " +
   "qualified doctor.";

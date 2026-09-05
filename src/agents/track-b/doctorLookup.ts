@@ -24,6 +24,24 @@ const SEARCH_DISCLAIMER =
   "Please confirm timings directly with the hospital before visiting.";
 
 /**
+ * Honest quota-exhaustion message shown to users when Gemini's daily API
+ * quota is reached. Kept identical across doctorLookup and fallbackAssistant
+ * so it reads as one consistent system message.
+ */
+export const QUOTA_EXHAUSTED_MESSAGE =
+  "Our AI search quota for today has been reached — please try again later.";
+
+/**
+ * Detects whether a caught error is specifically a Gemini API quota
+ * exhaustion (HTTP 429 / RESOURCE_EXHAUSTED). Case-insensitive check
+ * against the error's string representation.
+ */
+export function isQuotaExhaustedError(error: unknown): boolean {
+  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return msg.includes("429") || msg.includes("resource_exhausted") || msg.includes("quota");
+}
+
+/**
  * Serper.dev API response shape (subset of fields we use).
  * See: https://serper.dev/docs/google-search-api
  */
@@ -51,11 +69,10 @@ function getGeminiClient(): GoogleGenAI | null {
 }
 
 /**
- * Prompt for cleaning raw Serper snippets into a readable doctor listing.
- * Strictly grounded — Gemini may only reformat what the snippets contain,
- * never invent doctors, timings, or phone numbers. Duplicates are merged,
- * search-engine boilerplate is discarded, and the output is a plain
- * bulleted list limited to the five canonical fields.
+ * Prompt for cleaning raw Serper snippets into a structured doctor listing.
+ * Requires AT LEAST 3 doctors per department-based query, uses a strict
+ * four-field format (Name | Department | Hospital | Timings), and forbids
+ * ratings, opinions, or "best" language to avoid implied endorsements.
  */
 const CLEANUP_PROMPT =
   "You are a strict data-extraction and formatting assistant for a Pakistani " +
@@ -75,55 +92,171 @@ const CLEANUP_PROMPT =
   "Karachi?' — a question is never a fact; do not include it.\n" +
   "- Chopped fragments, ellipses ('...'), and incomplete sentences with no " +
   "usable detail.\n\n" +
-  "OUTPUT FORMAT — a plain bulleted list, one bullet per doctor or hospital, " +
-  "exactly in this shape:\n" +
-  "- Dr. Name — Specialty | Hospital/Clinic, City | Days & Timings | Phone\n\n" +
+  "OUTPUT FORMAT — a plain bulleted list, one bullet per doctor. Each line " +
+  "starts with '- ' followed by four fields separated by ' | ' in this exact " +
+  "order:\n" +
+  "1. Doctor name (prefixed with 'Dr. ')\n" +
+  "2. Department/specialty\n" +
+  "3. Hospital or clinic name\n" +
+  "4. Timings (days and hours)\n\n" +
   "STRICT RULES:\n" +
-  "1. Each bullet may contain ONLY these fields, in this order: Doctor " +
-  "Name, Specialty, Hospital/Clinic Location, Timings/Days, Contact Number.\n" +
-  "2. If any field is missing or uncertain, OMIT it silently — no 'N/A', no " +
-  "placeholder, no ellipsis, no broken text.\n" +
-  "3. Do NOT invent or guess any name, specialty, timing, phone number, or " +
-  "address that is not in the snippets.\n" +
-  "4. Output the list only — no preamble, no summary sentence, no closing " +
-  "remark. Start directly with the first bullet.\n" +
-  "5. If nothing real can be extracted from the snippets, reply with exactly " +
+  "1. Each bullet MUST contain exactly four pipe-separated fields in the " +
+  "order above. No more, no fewer fields.\n" +
+  "2. If timings are not found in the snippets, write 'Timings not available' " +
+  "— NEVER omit the field or the pipe separator.\n" +
+  "3. If a hospital/clinic name is not found, write 'Location not available'.\n" +
+  "4. If a department/specialty is not found, write 'Specialty not available'.\n" +
+  "5. List AT LEAST 3 different doctors if the snippets contain them. If " +
+  "fewer than 3 genuinely exist in the snippets, list all that are available.\n" +
+  "6. Do NOT include ratings, reviews, 'best doctor', 'top rated', 'most " +
+  "experienced', or any opinion/endorsement language. Just the four facts.\n" +
+  "7. Do NOT invent or guess any name, department, hospital, or timing that " +
+  "is not in the snippets.\n" +
+  "8. Do NOT include phone numbers in the output.\n" +
+  "9. Output the list only — no preamble, no summary sentence, no closing " +
+  "remark, no meta-commentary like 'Let me check' or 'Here are the results'. " +
+  "Start directly with the first bullet.\n" +
+  "10. If nothing real can be extracted from the snippets, reply with exactly " +
   "this sentence and nothing else: No reliable doctor information found.\n\n" +
   "Raw snippets:\n\n";
 
 /**
  * Pass raw Serper snippets to Gemini for cleanup and structuring.
- * Returns null when Gemini is unavailable or fails — the caller then falls
- * back to the local deterministic formatter, NEVER to the raw snippets.
+ * Validates output against the expected line format. On malformed output,
+ * retries once with a stricter instruction. Returns null when Gemini is
+ * unavailable, fails, or produces no valid output after retry — the caller
+ * then falls back to the local deterministic formatter.
  */
-async function cleanSnippetsWithGemini(rawSnippets: string): Promise<string | null> {
+async function cleanSnippetsWithGemini(rawSnippets: string): Promise<{ cleaned: string | null; quotaExhausted: boolean }> {
   const client = getGeminiClient();
   if (!client) {
     logger.warn("[DoctorLookup] GEMINI_API_KEY not set — using local snippet formatting");
-    return null;
+    return { cleaned: null, quotaExhausted: false };
   }
 
-  try {
-    const completion = await client.models.generateContent({
-      model: GEMINI_CLEANUP_MODEL,
-      contents: [{ role: "user", parts: [{ text: CLEANUP_PROMPT + rawSnippets }] }],
-      config: {
-        temperature: 0.1,
-        // Generous cap: thinking tokens count toward maxOutputTokens, and a
-        // cleaned 5-doctor list itself needs a few hundred tokens.
-        maxOutputTokens: 2000,
-      },
-    });
+  let quotaExhausted = false;
 
-    const text = completion.text ?? "";
-    return text.trim().length > 0 ? text.trim() : null;
-  } catch (error) {
-    console.error('[DoctorLookup] Cleaning failed:', error);
-    logger.warn("[DoctorLookup] Gemini cleanup failed — using local snippet formatting", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return null;
+  const callGemini = async (prompt: string): Promise<string | null> => {
+    try {
+      const completion = await client.models.generateContent({
+        model: GEMINI_CLEANUP_MODEL,
+        contents: [{ role: "user", parts: [{ text: prompt + rawSnippets }] }],
+        config: {
+          temperature: 0.1,
+          // Generous cap: thinking tokens count toward maxOutputTokens, and a
+          // cleaned multi-doctor list needs a few hundred tokens.
+          maxOutputTokens: 2000,
+        },
+      });
+      const text = completion.text ?? "";
+      return text.trim().length > 0 ? text.trim() : null;
+    } catch (error) {
+      console.error('[DoctorLookup] Cleaning failed:', error);
+      if (isQuotaExhaustedError(error)) {
+        quotaExhausted = true;
+      }
+      logger.warn("[DoctorLookup] Gemini cleanup failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  };
+
+  // ── DIAGNOSTIC: log raw snippets fed into cleanup ──
+  console.log("[DoctorLookup:DIAG] ═══ RAW SNIPPETS FED TO GEMINI ═══");
+  console.log(rawSnippets);
+  console.log("[DoctorLookup:DIAG] ═══ END RAW SNIPPETS ═══");
+
+  // First attempt with standard prompt.
+  const firstAttempt = await callGemini(CLEANUP_PROMPT);
+  // ── DIAGNOSTIC: log first attempt raw output ──
+  console.log("[DoctorLookup:DIAG] ═══ FIRST ATTEMPT RAW OUTPUT ═══");
+  console.log(firstAttempt ?? "(null — Gemini returned empty or threw)");
+  console.log("[DoctorLookup:DIAG] ═══ END FIRST ATTEMPT ═══");
+
+  if (firstAttempt && isValidCleanedOutput(firstAttempt)) {
+    console.log("[DoctorLookup:DIAG] ✅ FIRST ATTEMPT PASSED validation");
+    return { cleaned: firstAttempt, quotaExhausted: false };
   }
+
+  // ── DIAGNOSTIC: log first attempt failure detail ──
+  if (firstAttempt) {
+    const failing = getFailingLines(firstAttempt);
+    console.log("[DoctorLookup:DIAG] ❌ FIRST ATTEMPT FAILED validation");
+    console.log("[DoctorLookup:DIAG]   Total non-empty lines:", firstAttempt.split("\n").filter(l => l.trim()).length);
+    console.log("[DoctorLookup:DIAG]   Failing lines (" + failing.length + "):");
+    failing.forEach((l, i) => console.log(`[DoctorLookup:DIAG]     [${i}] "${l}"`));
+    logger.warn("[DoctorLookup] Gemini output failed validation — retrying with stricter prompt", {
+      preview: firstAttempt.slice(0, 200),
+    });
+  } else {
+    console.log("[DoctorLookup:DIAG] ⚠️ FIRST ATTEMPT returned null — skipping validation");
+  }
+
+  const retryAttempt = await callGemini(STRICT_RETRY_PROMPT);
+  // ── DIAGNOSTIC: log retry raw output ──
+  console.log("[DoctorLookup:DIAG] ═══ RETRY ATTEMPT RAW OUTPUT ═══");
+  console.log(retryAttempt ?? "(null — Gemini returned empty or threw)");
+  console.log("[DoctorLookup:DIAG] ═══ END RETRY ATTEMPT ═══");
+
+  if (retryAttempt && isValidCleanedOutput(retryAttempt)) {
+    console.log("[DoctorLookup:DIAG] ✅ RETRY PASSED validation");
+    return { cleaned: retryAttempt, quotaExhausted: false };
+  }
+
+  // ── DIAGNOSTIC: log retry failure detail ──
+  if (retryAttempt) {
+    const failing = getFailingLines(retryAttempt);
+    console.log("[DoctorLookup:DIAG] ❌ RETRY FAILED validation");
+    console.log("[DoctorLookup:DIAG]   Total non-empty lines:", retryAttempt.split("\n").filter(l => l.trim()).length);
+    console.log("[DoctorLookup:DIAG]   Failing lines (" + failing.length + "):");
+    failing.forEach((l, i) => console.log(`[DoctorLookup:DIAG]     [${i}] "${l}"`));
+  } else {
+    console.log("[DoctorLookup:DIAG] ⚠️ RETRY returned null — skipping validation");
+  }
+
+  // Both attempts failed validation — return null so caller uses local formatter.
+  console.log("[DoctorLookup:DIAG] 🚫 BOTH ATTEMPTS FAILED — returning null to caller");
+  logger.warn("[DoctorLookup] Gemini output failed validation after retry — falling back to local formatter");
+  return { cleaned: null, quotaExhausted };
+}
+
+/**
+ * Validates that Gemini's cleaned output matches the expected format:
+ * each non-empty line must be a bullet with four pipe-separated fields
+ * (Name | Department | Hospital | Timings). Rejects meta-commentary,
+ * instruction leakage, stray punctuation, and incomplete lines.
+ */
+function isValidCleanedOutput(text: string): boolean {
+  const lines = text.split("\n").filter((l) => l.trim().length > 0);
+  if (lines.length === 0) return false;
+
+  // Single-line "no results" sentinel is valid.
+  if (
+    lines.length === 1 &&
+    lines[0].toLowerCase().startsWith("no reliable doctor information")
+  ) {
+    return true;
+  }
+
+  // Every line must be a bullet with exactly 4 pipe-separated fields
+  // (3 pipe characters): Name | Department | Hospital | Timings.
+  const bulletRe = /^-\s+.+\s*\|\s*.+\s*\|\s*.+\s*\|\s*.+$/;
+  for (const line of lines) {
+    if (!bulletRe.test(line.trim())) return false;
+  }
+
+  return true;
+}
+
+/**
+ * DIAGNOSTIC ONLY — returns the specific lines that fail the 4-field
+ * bullet validation. Not used in routing logic, only for console logging.
+ */
+function getFailingLines(text: string): string[] {
+  const lines = text.split("\n").filter((l) => l.trim().length > 0);
+  const bulletRe = /^-\s+.+\s*\|\s*.+\s*\|\s*.+\s*\|\s*.+$/;
+  return lines.filter((l) => !bulletRe.test(l.trim()));
 }
 
 // ─── Doctor query field extraction (Gemini) ─────────────────────────────────
@@ -191,6 +324,25 @@ function parseExtractionReply(reply: string): Record<string, unknown> | null {
   }
 }
 
+// ─── Stricter retry prompt (used when first Gemini output fails validation) ─
+
+const STRICT_RETRY_PROMPT =
+  "CRITICAL FORMATTING INSTRUCTION: You must output ONLY properly formatted " +
+  "bullet points. No meta-commentary, no instructions, no template examples, " +
+  "no 'Let me check', no 'Here are the results', no colons on their own line, " +
+  "no raw data notes like '(no phone in snippet)'.\n\n" +
+  "Each line MUST have exactly four fields separated by ' | ' in this order:\n" +
+  "1. Doctor name (prefixed with 'Dr. ')\n" +
+  "2. Department/specialty (write 'Specialty not available' if unknown)\n" +
+  "3. Hospital/clinic name (write 'Location not available' if unknown)\n" +
+  "4. Timings (write 'Timings not available' if unknown)\n\n" +
+  "Every single line must have exactly three pipe characters separating four " +
+  "fields. Never omit a field. List at least 3 doctors. No ratings, no " +
+  "opinions.\n\n" +
+  "If nothing real can be extracted, reply with exactly: No reliable doctor " +
+  "information found.\n\n" +
+  "Raw snippets:\n\n";
+
 /**
  * Extract doctorName/department/hospitalName/areaHint from a free-text
  * message plus recent conversation history, using Gemini. Replaces the old
@@ -244,7 +396,7 @@ export async function extractDoctorQueryFields(
           "Which doctor or specialty are you looking for, and in which city?",
       };
     }
-    return {
+    const extracted: DoctorQueryExtraction = {
       doctorName: asString(parsed.doctorName),
       department: asString(parsed.department),
       hospitalName: asString(parsed.hospitalName),
@@ -252,8 +404,26 @@ export async function extractDoctorQueryFields(
       needsClarification: parsed.needsClarification === true,
       clarifyingQuestion: asString(parsed.clarifyingQuestion),
     };
+
+    // Hard safety check: a named-doctor query with no city must ALWAYS
+    // ask for location before searching — even if Gemini's extraction
+    // incorrectly set needsClarification to false. This prevents raw
+    // un-located name searches from reaching the API.
+    if (extracted.doctorName && !extracted.areaHint) {
+      extracted.needsClarification = true;
+      extracted.clarifyingQuestion =
+        `Which city are you looking for Dr. ${extracted.doctorName} in?`;
+    }
+
+    return extracted;
   } catch (error) {
     console.error("[DoctorLookup] Extraction failed:", error);
+    if (isQuotaExhaustedError(error)) {
+      return {
+        needsClarification: true,
+        clarifyingQuestion: QUOTA_EXHAUSTED_MESSAGE,
+      };
+    }
     return {
       needsClarification: true,
       clarifyingQuestion:
@@ -329,13 +499,48 @@ function formatOrganicLocally(
     seen.add(key);
 
     if (title && snippet && title !== snippet) {
-      bullets.push(`- ${title} — ${snippet}`);
+      bullets.push(`- ${title} | ${snippet}`);
     } else {
       bullets.push(`- ${title || snippet}`);
     }
   }
 
   return bullets.join("\n");
+}
+
+/**
+ * When the query included a specific doctorName and the result has multiple
+ * doctors, separate the matching doctor from others and insert a dynamic
+ * department header before the extras. Only applies to named-doctor queries —
+ * pure department-browse queries keep the flat list unchanged.
+ */
+function postProcessDoctorList(
+  summaryText: string,
+  params: DoctorLookupParams
+): string {
+  if (!params.doctorName) return summaryText;
+
+  const lines = summaryText.split("\n").filter((l) => l.trim().length > 0);
+  if (lines.length <= 1) return summaryText;
+
+  const nameLower = params.doctorName.toLowerCase();
+  const matching: string[] = [];
+  const others: string[] = [];
+
+  for (const line of lines) {
+    if (line.toLowerCase().includes(nameLower)) {
+      matching.push(line);
+    } else {
+      others.push(line);
+    }
+  }
+
+  // Only add header when there are extras beyond the named doctor.
+  if (matching.length === 0 || others.length === 0) return summaryText;
+
+  const dept = params.department ?? "specialty";
+  const header = `\nOther ${dept} doctors:`;
+  return [...matching, header, "", ...others].join("\n");
 }
 
 export async function lookupDoctors(
@@ -356,8 +561,8 @@ export async function lookupDoctors(
 
   try {
     const query = params.doctorName
-      ? `${params.doctorName} doctor ${params.department} hospital ${params.areaHint} Pakistan practicing hours`
-      : `best ${params.department} specialists ${params.hospitalName ?? ""} ${params.areaHint} Pakistan hospital timings`;
+      ? `${params.doctorName} doctor ${params.department ?? ""} hospital ${params.areaHint} Pakistan practicing hours`
+      : `${params.department} specialists ${params.hospitalName ?? ""} ${params.areaHint} Pakistan hospital timings`;
 
     const res = await fetch("https://google.serper.dev/search", {
       method: "POST",
@@ -387,7 +592,8 @@ export async function lookupDoctors(
     }
 
     // Combine top organic results into the raw snippet payload for Gemini.
-    const MAX_RESULTS = 5;
+    // Use up to 8 organic results to maximise coverage for a 3+ doctor listing.
+    const MAX_RESULTS = 8;
     const top = organic.slice(0, MAX_RESULTS);
     const rawSnippets = top
       .map((r) => {
@@ -401,7 +607,7 @@ export async function lookupDoctors(
     if (!rawSnippets) return noResults();
 
     // ── Clean and structure via Gemini; local formatter as safe fallback ──
-    const cleaned = await cleanSnippetsWithGemini(rawSnippets);
+    const { cleaned, quotaExhausted } = await cleanSnippetsWithGemini(rawSnippets);
 
     // Gemini reports the snippets held only boilerplate — treat as no results.
     if (
@@ -411,15 +617,37 @@ export async function lookupDoctors(
       return noResults();
     }
 
-    // NEVER surface raw snippets: when Gemini is unavailable or fails, format
-    // the organic results locally instead (boilerplate stripped, deduped).
-    const summary_text = cleaned ?? formatOrganicLocally(top);
+    // When Gemini produced valid output, use it directly.
+    if (cleaned) {
+      return {
+        found: true,
+        summary_text: postProcessDoctorList(cleaned, params),
+        disclaimer: SEARCH_DISCLAIMER,
+        source: "serper_web_search",
+      };
+    }
 
-    if (!summary_text) return noResults();
+    // Gemini unavailable or failed validation — use local deterministic
+    // formatter (boilerplate stripped, deduped). Validate its output too
+    // so malformed text never reaches the user.
+    const localFormatted = formatOrganicLocally(top);
+    if (localFormatted && isValidCleanedOutput(localFormatted)) {
+      return {
+        found: true,
+        summary_text: postProcessDoctorList(localFormatted, params),
+        disclaimer: SEARCH_DISCLAIMER,
+        source: "serper_web_search",
+      };
+    }
 
+    // Local formatter also couldn't produce clean output — honest fallback.
+    // If quota exhaustion caused the Gemini failures, tell the user honestly
+    // rather than showing a misleading "couldn't find results" message.
     return {
-      found: true,
-      summary_text,
+      found: false,
+      summary_text: quotaExhausted
+        ? QUOTA_EXHAUSTED_MESSAGE
+        : "Couldn't find clean results for this search — please try rephrasing or search manually.",
       disclaimer: SEARCH_DISCLAIMER,
       source: "serper_web_search",
     };

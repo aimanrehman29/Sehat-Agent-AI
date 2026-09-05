@@ -13,7 +13,7 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "Sehat-Assist AI",
+  title: "Sehat-Agent AI",
   description:
     "Multi-agent healthcare platform: Pharma-Check AI, Lingo-Med AI, Care-Sync AI",
 };

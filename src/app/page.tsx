@@ -1,5 +1,5 @@
 /**
- * Sehat-Assist AI — Agent Hub Homepage.
+ * Sehat-Agent AI — Agent Hub Homepage.
  *
  * This is the navigation hub where all 6 agents are visible and tappable,
  * with the Orchestrator living as its own persistent footer option.
@@ -43,14 +43,14 @@ export default function HubPage() {
       >
         <Image
           src="/logo.png"
-          alt="Sehat-Assist AI"
+          alt="Sehat-Agent AI"
           width={36}
           height={36}
           priority
         />
         <div>
           <h1 className="text-lg font-semibold text-brand-forest">
-            Sehat-Assist AI
+            Sehat-Agent AI
           </h1>
           <p className="text-xs text-brand-g56" dir={lang === "ur" ? "rtl" : "ltr"}>
             {t.tagline}

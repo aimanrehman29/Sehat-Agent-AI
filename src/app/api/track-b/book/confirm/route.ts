@@ -68,7 +68,7 @@ function buildClosingTwiml(confirmed: boolean): string {
 <Response>
   <Say voice="Polly.Amy" language="en-IN">
     Bohat shukriya. Appointment confirm ho gayi hai.
-    Sehat-Assist AI aap ka shukarguzaar hai. Khuda hafiz.
+    Sehat-Agent AI aap ka shukarguzaar hai. Khuda hafiz.
   </Say>
 </Response>`;
   }

@@ -19,6 +19,7 @@
 import EmergencyBanner from "./EmergencyBanner";
 import TriageCard from "./TriageCard";
 import HospitalListCard from "./HospitalListCard";
+import DoctorLookupCard from "./DoctorLookupCard";
 import FallbackCard from "./FallbackCard";
 import ErrorCard from "./ErrorCard";
 import VoiceResponsePlayer from "@/components/voice/VoiceResponsePlayer";
@@ -57,6 +58,10 @@ export default function ResultRenderer({ response }: { response: any }) {
 
     case "triage":
       content = <TriageCard result={result} />;
+      break;
+
+    case "doctor-lookup":
+      content = <DoctorLookupCard result={result} />;
       break;
 
     case "geo-locator":

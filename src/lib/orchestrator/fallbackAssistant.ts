@@ -17,6 +17,10 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { logger } from "@/lib/logger";
+import {
+  QUOTA_EXHAUSTED_MESSAGE,
+  isQuotaExhaustedError,
+} from "@/agents/track-b/doctorLookup";
 
 // ─── Result Interface ───────────────────────────────────────────────────────
 
@@ -69,7 +73,7 @@ function getGeminiClient(): GoogleGenAI | null {
 // ─── System Prompt ──────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT =
-  "You are the assistant for Sehat-Assist AI, a Pakistani healthcare navigation app. " +
+  "You are the assistant for Sehat-Agent AI, a Pakistani healthcare navigation app. " +
   "You do NOT diagnose, prescribe, or give specific medical advice. " +
   "If the user asks what the app can do, or a general/greeting question, answer directly and " +
   "warmly in 1-3 short sentences — do NOT say things like 'I'm not sure how to help.' " +
@@ -146,6 +150,14 @@ export async function generateFallbackResponse(
     logger.warn("[FallbackAssistant] Gemini call failed — using static fallback", {
       error: error instanceof Error ? error.message : String(error),
     });
+    // Honest quota disclosure — same message as doctorLookup.ts.
+    if (isQuotaExhaustedError(error)) {
+      return {
+        summary_text: QUOTA_EXHAUSTED_MESSAGE,
+        suggested_capabilities: APP_CAPABILITIES,
+        source: "static_fallback",
+      };
+    }
     return {
       summary_text: STATIC_FALLBACK,
       suggested_capabilities: APP_CAPABILITIES,

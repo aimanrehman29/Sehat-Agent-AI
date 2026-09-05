@@ -15,7 +15,7 @@ export const UI_STRINGS = {
   en: {
     chooseAssistant: "CHOOSE AN ASSISTANT",
     tagline: "Your health, one tap away",
-    talkToAssistant: "Talk to Sehat-Assist",
+    talkToAssistant: "Talk to Sehat-Agent",
     shareLocation: "Share location",
     thinking: "Thinking...",
   },

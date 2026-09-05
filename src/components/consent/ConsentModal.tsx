@@ -24,7 +24,7 @@ const COPY: Record<ConsentFeature, { title: string; body: string }> = {
       "We use your camera to scan medicine packaging, prescriptions, or " +
       "lab reports so our agents can read and analyze them for you. " +
       "Photos are processed to extract information and are never shared " +
-      "outside Sehat-Assist AI.",
+      "outside Sehat-Agent AI.",
   },
   location: {
     title: "Allow location access?",

@@ -297,7 +297,7 @@ export default function FindHospitalPage() {
 
         {/* Footer */}
         <footer className="text-center text-gray-600 text-xs pt-4">
-          Sehat-Assist AI — GeoLocator Agent — Google Places API (New)
+          Sehat-Agent AI — GeoLocator Agent — Google Places API (New)
         </footer>
       </div>
     </div>

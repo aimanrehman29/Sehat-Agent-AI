@@ -54,7 +54,7 @@ export function buildBookingScript(
 ): BookingScript {
   return {
     opening:
-      `Assalam-o-Alaikum. Main Sehat-Assist AI hoon, ek AI health navigation assistant. ` +
+      `Assalam-o-Alaikum. Main Sehat-Agent AI hoon, ek AI health navigation assistant. ` +
       `Main ${patientName} ki taraf se appointment ke liye baat kar raha hoon.`,
     request:
       `${patientName} ko ${department} department mein appointment chahiye, ` +
@@ -62,7 +62,7 @@ export function buildBookingScript(
     prompt: "Barah-e-karam confirm karein ya koi waqt bataen.",
     closingConfirmed:
       "Bohat shukriya. Appointment confirm ho gayi hai. " +
-      "Sehat-Assist AI aap ka shukarguzaar hai. Khuda hafiz.",
+      "Sehat-Agent AI aap ka shukarguzaar hai. Khuda hafiz.",
     closingNoResponse:
       "Koi jawab nahi mila. Hum dobara call karein gay. Shukriya.",
     closingNoConfirmation:
