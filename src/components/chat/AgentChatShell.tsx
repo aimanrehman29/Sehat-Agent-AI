@@ -239,12 +239,81 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
   }, [locationConsent.granted]);
 
   // ── Voice recording handler ──
-  function handleRecordingReady(recording: VoiceRecording) {
-    if (recording.transcriptText) {
-      setInputText(recording.transcriptText);
-      handleSend(recording.transcriptText);
-    }
+  // Track A (direct) agents keep the existing browser-transcript path — the
+  // Gemini audio-understanding upgrade only applies to the Orchestrator's
+  // own voice input path (endpointMode "orchestrator").
+  async function handleRecordingReady(recording: VoiceRecording) {
     setShowMic(false);
+
+    if (agent.endpointMode === "direct") {
+      // Track A: unchanged — reuse the browser's own transcription as text.
+      if (recording.transcriptText) {
+        setInputText(recording.transcriptText);
+        handleSend(recording.transcriptText);
+      }
+      return;
+    }
+
+    // Orchestrator: send the actual audio (not the browser's guess) to
+    // /api/orchestrator/voice, which transcribes + translates it via Gemini
+    // and relays the English text to the existing intent pipeline.
+    setIsLoading(true);
+    setTurns((t) => [...t, { type: "user", text: "🎙 Voice message" }]);
+    try {
+      const res = await fetch("/api/orchestrator/voice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          audio_base64: recording.audioBase64,
+          audio_mime_type: recording.audioMimeType,
+          latitude: coords?.latitude,
+          longitude: coords?.longitude,
+          agent_hint: agent.id,
+        }),
+      });
+      const data = await res.json();
+
+      // Same navigation handling as the text path — voice input on the
+      // Orchestrator's own screen can still yield a navigate instruction.
+      if (data?.result?.action === "navigate" && data.result.target_agent_id) {
+        setTurns((t) => [
+          ...t,
+          {
+            type: "response",
+            response: {
+              status: "success",
+              agent_source: "orchestrator",
+              result: { summary_text: "Taking you there..." },
+            },
+          },
+        ]);
+        setIsLoading(false);
+        setTimeout(() => {
+          router.push(
+            `/agent/${data.result.target_agent_id}?prefill=${encodeURIComponent(
+              data.result.carry_text
+            )}`
+          );
+        }, 500);
+        return;
+      }
+
+      setTurns((t) => [...t, { type: "response", response: data }]);
+    } catch {
+      setTurns((t) => [
+        ...t,
+        {
+          type: "response",
+          response: {
+            status: "error",
+            error: { message: "Something went wrong. Please try again." },
+          },
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   return (
@@ -335,6 +404,11 @@ export default function AgentChatShell({ agent }: { agent: AgentConfig }) {
                 <Icon size={16} color="#015D67" />
               </span>
               <div className="max-w-[85%]">
+                {turn.response?.result?.heard_text && (
+                  <p className="text-xs text-brand-g56 italic mb-1">
+                    Heard: "{turn.response.result.heard_text}"
+                  </p>
+                )}
                 <ResultRenderer response={turn.response} />
                 {/* Mandatory guardrails disclaimer — sits under every bot bubble */}
                 {turn.response?.guardrails?.disclaimer_text && (

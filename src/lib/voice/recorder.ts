@@ -196,10 +196,16 @@ export function useVoiceRecorder(lang: string = "en-US"): UseVoiceRecorderReturn
         setRecording((prev) => (prev && text ? { ...prev, transcriptText: text } : prev));
       });
     } catch (err) {
+      // NotAllowedError means the user (or browser settings) blocked the
+      // mic — surface an actionable message instead of the raw error text.
+      const isPermissionDenied =
+        err instanceof DOMException && err.name === "NotAllowedError";
       setError(
-        err instanceof Error
-          ? err.message
-          : "Microphone access denied or unavailable."
+        isPermissionDenied
+          ? "Microphone is blocked for this site. Check your browser's site settings (tap the icon next to the address bar) and allow microphone access, then try again."
+          : err instanceof Error
+            ? err.message
+            : "Microphone access denied or unavailable."
       );
       setState("idle");
     }
